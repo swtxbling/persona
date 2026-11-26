@@ -113,7 +113,7 @@ import { useFoldSearch } from "./useFoldSearch";
 import { DeleteSessionDialog, preloadSessionDialogs, RenameDialog, RenameSpaceDialog, renameTitle, SessionInfoDialog } from "./SessionDialogs";
 import { PermissionPicker, usePlanMode } from "./PermissionPicker";
 import { permissionsCommand } from "../../lib/permissions-command";
-import { archiveCloseItems, closeItems } from "../AgentMenus";
+import { archiveCloseItems, closeItems } from "../agent-close-items";
 import { ChatSidebarButton } from "../ShellSwitch";
 import { appArchiveDeps, offerSessionDelete, restoreAgent, useArchived } from "../../lib/agent-archives";
 import { UltracodeLostNote } from "./Ultracode";

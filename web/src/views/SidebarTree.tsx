@@ -27,7 +27,7 @@ import type { TermSpace } from "../lib/terminals";
 import { useFolded } from "../lib/use-folded";
 import { stateCount, type WaitReason } from "../lib/state-labels";
 import { neverConnected } from "../lib/add-computer";
-import { type GoFn, GroupCount, holdsRow, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup } from "./SidebarParts";
+import { type GoFn, GroupCount, holdsRow, type NodeMenuFn, type RegFn, rowKey, ROW_TITLE_MIN, type RowMenuFn, Section, SidebarGroup } from "./SidebarParts";
 import { NavRow, SessionRow } from "./SidebarRows";
 import { WindowedRows } from "./WindowedRows";
 import { workspacePinTime, type WorkspaceTarget } from "../lib/workspace-catalog";
@@ -43,7 +43,7 @@ const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", work
  *  attention when it waits on the owner, the neutral one otherwise. */
 const TreeStateText = memo(function TreeStateText({ state, label, wait }: { state: TreeState; label?: string; wait?: WaitReason }) {
   const tone = wait ? (wait === "owner" ? TREE_TONE.needs_you : TREE_TONE.waiting) : TREE_TONE[state];
-  return <span className={cx("shrink-0 text-[11px] font-semibold whitespace-nowrap", tone)} data-tree-state={wait}>{label ?? treeStateLabel(state)}</span>;
+  return <span className={cx("min-w-0 shrink-[20] truncate text-[11px] font-semibold whitespace-nowrap", tone)} data-tree-state={wait}>{label ?? treeStateLabel(state)}</span>;
 });
 
 // The tree's rows are memoized, and a push hands them the nodes it did not change as the same objects (shareTree), so
@@ -207,14 +207,14 @@ export const TreeTodoRows = memo(function TreeTodoRows({ td, top, ...p }: { td: 
   // the link takes the touch row's height (touch-hit; the words truncate inside it, which would clip its square), so a
   // finger just off the words opens the to-do rather than folding it
   const title = td.todoId ? (
-    <a href={href({ name: "todos", id: td.todoId })} onClick={(e) => { e.preventDefault(); openTodoFromTag(td.todoId!, navigate, p.onNavigate); }} className="touch-hit min-w-0 flex-1 font-medium text-ink hover:underline"><span className="block truncate">{td.name}</span></a>
+    <a href={href({ name: "todos", id: td.todoId })} onClick={(e) => { e.preventDefault(); openTodoFromTag(td.todoId!, navigate, p.onNavigate); }} className={`touch-hit ${ROW_TITLE_MIN} flex-1 basis-auto font-medium text-ink hover:underline`}><span className="block truncate">{td.name}</span></a>
   ) : (
-    <button type="button" onClick={toggle} className="min-w-0 flex-1 truncate text-left">{td.name}</button>
+    <button type="button" onClick={toggle} className={`${ROW_TITLE_MIN} flex-1 basis-auto truncate text-left`}>{td.name}</button>
   );
   const state = td.taskState ? (
     <DirectionStateText state={td.taskState} />
   ) : td.status === "usage_limit" ? (
-    <span className="shrink-0 text-[11px] font-semibold whitespace-nowrap text-orange">{t("lib-usage-limit.short")}</span>
+    <span className="min-w-0 shrink-[20] truncate text-[11px] font-semibold whitespace-nowrap text-orange">{t("lib-usage-limit.short")}</span>
   ) : (
     <TreeStateText state={td.state} label={td.statusLabel} wait={td.wait} />
   );
@@ -365,20 +365,20 @@ function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }:
   const showWorktreeKind = !w.main && (!w.workspace || (w.workspace.is_main === false && w.workspace.workspace_kind !== "folder"));
   return (
     <div ref={selectedRow} className="mt-px" data-workspace-key={w.workspace ? w.key : undefined}>
-      <div className={cx("group/sec relative z-10 flex w-full min-w-0 items-center gap-1.5 whitespace-nowrap rounded-control py-1 pl-3 pr-2 text-left text-[11.5px] text-ink-2 hover:bg-hover", selected === w.key && "bg-hover")} {...(w.target && actions.onWorkspaceMenu ? contextMenuProps((at, anchor) => actions.onWorkspaceMenu!(w.target!, anchor, at)) : {})}>
+      <div className={cx("@container group/sec relative z-10 flex w-full min-w-0 items-center gap-1.5 whitespace-nowrap rounded-control py-1 pl-3 pr-2 text-left text-[11.5px] text-ink-2 hover:bg-hover", selected === w.key && "bg-hover")} {...(w.target && actions.onWorkspaceMenu ? contextMenuProps((at, anchor) => actions.onWorkspaceMenu!(w.target!, anchor, at)) : {})}>
         <button type="button" aria-label={t("workspace-tree.disclosure", { name: w.name })} aria-expanded={!folded} onClick={toggle} className="touch-hit relative flex min-h-7 shrink-0 items-center [@media(pointer:coarse)]:min-h-11">
           <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
         {w.main ? <Icon name="home" size={11} stroke={2} className="shrink-0 text-ink-3" /> : showWorktreeKind ? (
           <span className="flex shrink-0 items-center gap-1 text-ink-3">
             <Icon name="branch" size={11} stroke={2} className="shrink-0" />
-            <span>{t("workspace-tree.worktree_kind")}</span>
+            <span className="@max-[15rem]:sr-only">{t("workspace-tree.worktree_kind")}</span>
           </span>
         ) : null}
         <SpaceMarks pinned={workspacePinTime(w.workspace) !== undefined} muted={false} />
-        <button type="button" title={title} aria-pressed={selected === w.key} aria-expanded={!folded} onClick={() => { if (w.target) actions.onSelectWorkspace?.(w.target); toggle(); }} className="flex min-h-7 min-w-0 flex-1 items-center gap-1.5 text-left hover:text-ink [@media(pointer:coarse)]:min-h-11">{label}</button>
+        <button type="button" title={title} aria-pressed={selected === w.key} aria-expanded={!folded} onClick={() => { if (w.target) actions.onSelectWorkspace?.(w.target); toggle(); }} className={`flex min-h-7 ${ROW_TITLE_MIN} flex-1 basis-auto items-center gap-1.5 text-left hover:text-ink [@media(pointer:coarse)]:min-h-11`}>{label}</button>
         {w.workspace?.available === false && <Icon name="warning" size={11} className="shrink-0 text-ink-3" aria-label={t("workspace-tree.unavailable")} />}
-        <span className="ml-auto shrink-0 text-[10.5px] text-ink-3 tabular-nums">{running > 0 ? t("sidebar.worktree_agents", { count: w.sessions.length }) : t("sidebar.idle")}</span>
+        <span className="ml-auto min-w-0 shrink-[20] truncate text-[10.5px] text-ink-3 tabular-nums">{running > 0 ? t("sidebar.worktree_agents", { count: w.sessions.length }) : t("sidebar.idle")}</span>
         {w.target && actions.onWorkspaceMenu && <button type="button" data-row-menu aria-label={t("workspace-tree.actions", { name: w.name })} aria-haspopup="menu" onClick={(e) => actions.onWorkspaceMenu!(w.target!, e.currentTarget)} className="touch-hit relative flex size-5 shrink-0 items-center justify-center rounded-control text-ink-3 hover:bg-hover-2 focus-visible:text-ink [@media(hover:none)]:size-8"><Icon name="more" size={12} /></button>}
       </div>
       <Collapse open={!folded} sidebarFold>
@@ -459,10 +459,10 @@ export function SpaceSection({ sp, machineName, reg, hover, activeKey, go, pinne
       onToggle={toggle}
       onMenu={(at, el) => onMenu(sp, el, at, { folded, toggle })}
       title={
-        <span className="flex items-center gap-1.5">
-          <span className="truncate normal-case tracking-normal text-[11.5px] text-ink-2">{sp.name}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 truncate normal-case tracking-normal text-[11.5px] text-ink-2">{sp.name}</span>
           <SpaceMarks pinned={pinned} muted={muted} />
-          {machineName && <span className="truncate normal-case tracking-normal text-[11px] font-normal text-ink-3">{machineName}</span>}
+          {machineName && <span className="min-w-0 truncate normal-case tracking-normal text-[11px] font-normal text-ink-3">{machineName}</span>}
         </span>
       }
       right={

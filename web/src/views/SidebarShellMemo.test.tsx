@@ -157,7 +157,7 @@ async function mount() {
   expect(buildTodoTree).toHaveBeenCalled();
   expect(buildTodoAgentGroups).toHaveBeenCalled();
   for (const [name, count] of shellReads()) {
-    if (name === "link") expect(count).toBe(0); // closed dialog code now loads only on intent
+    if (name === "link" || name === "seen" || name === "node") expect(count).toBe(0); // closed dialog code now loads only on intent
     else expect(count).toBeGreaterThan(0);
   }
   clearCounts();
@@ -213,7 +213,10 @@ describe("the sidebar shell across store pushes", () => {
   it("opens and closes the memoized link dialog for the current row", async () => {
     await mount();
     const openLink = async () => {
-      act(() => row()!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })));
+      await act(async () => {
+        row()!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+        await import("./AgentMenus"); // wait for the row menu chunk requested on intent
+      });
       await flush();
       const link = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((b) => b.textContent?.includes(t("agentmenus.link_to_todo")))!;
       expect(link).toBeTruthy();
@@ -241,7 +244,10 @@ describe("the sidebar shell across store pushes", () => {
     await flush();
     const openSeen = async () => {
       const button = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes(t("lib-state-labels.mark_all_seen")))!;
-      act(() => button.click());
+      await act(async () => {
+        button.click();
+        await import("./AgentMenus"); // wait for the mark-seen dialog chunk requested on intent
+      });
       await flush();
       return document.querySelector('[role="dialog"][aria-modal="true"]')!;
     };

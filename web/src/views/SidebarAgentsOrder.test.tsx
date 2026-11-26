@@ -31,7 +31,10 @@ class FakeSocket {
   push(msg: Record<string, unknown>) { this.onmessage?.({ data: JSON.stringify(msg) }); }
 }
 const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } }));
-const flush = async () => { for (let i = 0; i < 10; i++) await act(async () => { await Promise.resolve(); }); };
+const flush = async () => {
+  await act(async () => { await vi.dynamicImportSettled(); });
+  for (let i = 0; i < 10; i++) await act(async () => { await Promise.resolve(); });
+};
 let host: HTMLDivElement, root: Root;
 const sidebar = () => <Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />;
 const agentsText = () => host.querySelector("[data-sidebar-agents]")?.textContent ?? "";

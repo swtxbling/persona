@@ -43,7 +43,7 @@ import { RecommendedTag } from "../ui/RecommendedTag";
 import { Tag } from "./assistant/parts";
 import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
-import { MarkSeenDialog } from "./AgentMenus";
+import { LazyMarkSeenDialog as MarkSeenDialog } from "./LazyAgentOverlays";
 import { answeredLookup, answeredSessions } from "./assistant/answered-lookup";
 import { resolve } from "./chat/Interactions";
 import { deleteFailed } from "./chat/OutboxBubbles";

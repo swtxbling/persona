@@ -7,7 +7,7 @@ import { mergeRefs } from "../../lib/tap-guard";
 import { delegateLines, isDelegating, recommendedLabels, type DelegatedAnswer } from "../../lib/delegate";
 import { supervisorHeld } from "../../lib/supervisor-held";
 import { Choice, DigitHint } from "./Choice";
-import { DelegatedCard } from "./Delegated";
+import { OverlayBoundary } from "../LazyOverlay";
 import { BUSY_MOTION, spinStyle } from "../../lib/busy-motion";
 import { appArchiveDeps, archiveAgent, archiveSession } from "../../lib/agent-archives";
 import { isSessionReview } from "../../lib/types";
@@ -296,6 +296,18 @@ function ToolLoopCard({ ix }: { ix: Interaction }) {
 }
 
 const SessionReviewCard = lazyPage(() => import("./SessionReviewCard").then((m) => m.SessionReviewCard));
+const DelegatedCardContent = lazyPage(() => import("./Delegated").then((m) => m.DelegatedCard));
+const noopClose = () => {};
+
+function LazyDelegatedCard({ d }: { d: DelegatedAnswer }) {
+  return (
+    <OverlayBoundary open onClose={noopClose}>
+      <Suspense fallback={null}>
+        <DelegatedCardContent d={d} />
+      </Suspense>
+    </OverlayBoundary>
+  );
+}
 
 export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; canApprove: boolean; onAnswer?: (answers: Record<string, string>) => Promise<boolean> }) {
   const ime = useComposition();
@@ -1556,7 +1568,7 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
   if (!count && !answered.length && !delegated.length) return null;
   const shown = showsAnswered({ narrow, keyboard, open, short });
   const done = shown
-    ? [...delegated.map((d) => <DelegatedCard key={d.ix.id} d={d} />), ...(answered.length ? [<AnsweredSummary key="answered" answered={answered} />] : [])]
+    ? [...delegated.map((d) => <LazyDelegatedCard key={d.ix.id} d={d} />), ...(answered.length ? [<AnsweredSummary key="answered" answered={answered} />] : [])]
     : [];
   // the cut-off count only while all the cards are opened: a stack folded to its first says where it stands instead (the
   // position chip). Each card has its own keyed provider, so a card moving up to first as the one above it goes keeps

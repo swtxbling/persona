@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { seedAgentsDisplay } from "../../lib/agents-display";
 import { setToken } from "../../lib/api";
 vi.hoisted(() => {
@@ -26,6 +26,11 @@ import { closePalette, getPalette } from "../../lib/palette";
 import { getState, reset, savePins, upsertSession } from "../../lib/store";
 import type { Machine, Session } from "../../lib/types";
 import { AgentsList, Sidebar } from "../Sidebar";
+import { preloadAgentChatListControls } from "./LazyAgentChatListControls";
+
+beforeAll(async () => {
+  await preloadAgentChatListControls();
+});
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

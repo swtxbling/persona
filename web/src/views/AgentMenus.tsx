@@ -3,8 +3,7 @@
 import { flipMute, flipPin, handToPersona } from "../lib/agent-actions";
 import { errorText } from "../lib/api";
 import { resumeCommand, sessionCanRename, sessionMenuActions } from "../lib/format";
-import { appArchiveDeps, archiveAgent, archiveOffers, closeOffer, offerSessionDelete } from "../lib/agent-archives";
-import { closeAgentAction } from "../lib/close-agent";
+import { offerSessionDelete } from "../lib/agent-archives";
 import { machineWithHub } from "../lib/mesh";
 import { isPinned } from "../lib/pins";
 import { isMuted } from "../lib/session-actions";
@@ -20,13 +19,10 @@ import { t } from "../i18n";
 import { markAllSeenLabel } from "../lib/state-labels";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { SpaceMenuProps } from "./SpaceMenu";
+import { archiveCloseItems, closeItems, isPromiseLike, runControlled, type ArchiveCloseActions, type NoticeTone } from "./agent-close-items";
 
-export type NoticeTone = "ok" | "error" | "info";
-export interface ArchiveCloseActions {
-  onArchive?: (s: Session) => void | Promise<void>;
-  onCloseAgent?: (s: Session) => void;
-  onNotice?: (message: string, tone: NoticeTone) => void;
-}
+export { archiveCloseItems, closeItems };
+export type { ArchiveCloseActions, NoticeTone };
 export interface AgentRowMenuActions extends ArchiveCloseActions {
   onAttach?: (s: Session) => void | Promise<void>;
   onTogglePin?: (s: Session) => void | Promise<void>;
@@ -47,14 +43,6 @@ export interface AgentRowMenuProps extends AgentRowMenuActions {
 export interface MarkSeenDialogProps {
   list: Session[] | null; release?: Session[]; onClose: () => void; onDone?: () => void;
   onMarkSeen?: (sessions: Session[]) => void | Promise<void>; onNotice?: (message: string, tone: NoticeTone) => void;
-}
-
-const isPromiseLike = (v: unknown): v is PromiseLike<unknown> => Boolean(v) && typeof (v as PromiseLike<unknown>).then === "function";
-function runControlled(fn: () => void | Promise<void>, onNotice?: (message: string, tone: NoticeTone) => void) {
-  try {
-    const res = fn();
-    if (isPromiseLike(res)) void Promise.resolve(res).catch((e) => { onNotice?.(errorText(e), "error"); });
-  } catch (e) { onNotice?.(errorText(e), "error"); }
 }
 
 /** What a row's ⋯ (and its right click) offers. `onLinkTodo`: the row can hang on a todo ("Link to to-do…"; "Move to another to-do…" and
@@ -84,33 +72,6 @@ export function agentRowMenuItems(s: Session, o: AgentRowMenuItemsOptions): Menu
     ...archiveCloseItems(s, features, o),
     ...(offerSessionDelete(s, features) ? [{ key: "delete", label: t("agentmenus.delete_chat"), icon: "trash" as const, danger: true, onSelect: () => onDelete(s) }] : []),
   ];
-}
-
-/** "Archive" and "Close…" after a hairline (#7125). Archive (lib/agent-archives.ts) only hides the agent, so a busy one
- *  shows it disabled, saying what to wait for. Close… (lib/close-agent.ts) asks, then archives and closes an agent that
- *  is not busy, and says what closing interrupts before it closes a busy one. The chat's ⋯ offers the same. */
-export function archiveCloseItems(s: Session, features: readonly string[], actions?: ArchiveCloseActions): MenuItem[] {
-  const archive = archiveOffers(s, features).archive;
-  const items: MenuItem[] = [
-    ...(archive !== "no"
-      ? [{ key: "archive", label: t("agentmenus.archive"), icon: "archive" as const, disabled: archive === "busy", detail: archive === "busy" ? t("agentmenus.archive_busy") : undefined,
-          onSelect: () => { if (archive !== "busy") actions?.onArchive ? runControlled(() => actions.onArchive!(s), actions.onNotice) : void archiveAgent(s, false, appArchiveDeps); } }]
-      : []),
-    ...closeItems(s, features, actions?.onCloseAgent),
-  ];
-  return items.map((it, i) => (i === 0 ? { ...it, divider: true } : it));
-}
-
-/** "Close…" alone: an archived chat's ⋯ has it under Restore while its agent is still open on the computer. */
-export function closeItems(s: Session, features: readonly string[], onCloseAgent?: (s: Session) => void): MenuItem[] {
-  if (onCloseAgent) {
-    const offer = closeOffer(s, features);
-    if (offer === "no") return [];
-    return [{ key: "close", label: t("agentmenus.close"), icon: "x" as const, danger: true,
-      ...(offer === "busy" ? { disabled: true, detail: t("agentmenus.close_busy"), onSelect: () => {} } : { onSelect: () => onCloseAgent(s) }) }];
-  }
-  const close = closeAgentAction(s, features);
-  return close ? [{ key: "close", label: t("agentmenus.close"), icon: "x" as const, danger: true, ...close }] : [];
 }
 
 async function unlinkTodo(s: Session, todo: string, onNotice?: (message: string, tone: NoticeTone) => void) {

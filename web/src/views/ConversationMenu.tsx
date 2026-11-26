@@ -12,6 +12,7 @@ import { refreshAssistant } from "../lib/store";
 import type { Session } from "../lib/types";
 import { copyText, Dialog, Loading, toast, type MenuItem, type ToastAction } from "../ui/atoms";
 import { t } from "../i18n";
+import { conversationArchiveItem as baseConversationArchiveItem } from "./conversation-archive";
 
 /** What the hub does for the menu; tests swap it. */
 export interface ConversationMenuDeps {
@@ -53,16 +54,6 @@ export const conversationLive = (s: Session) => s.status !== "offline";
 
 const reread = (deps: ConversationMenuDeps) => void deps.refresh().catch(() => {});
 
-async function undoArchive(s: Session, title: string, deps: ConversationMenuDeps) {
-  try {
-    await deps.unarchive(s);
-    deps.notify(t("conversation-menu.unarchived", { title }), "ok");
-  } catch (e) {
-    deps.notify(t("conversation-menu.undo_failed", { error: errorText(e) }), "error");
-  }
-  reread(deps);
-}
-
 /** 设为常驻 / 取消常驻 for a conversation that is not the main one (`leader`: it is one now). Both ask a second time
  * before the hub call (#6214): the first choice only arms the row, the second runs it, and the detail says what moves —
  * unpinning sends the chat back to 最近 and returns its open tasks to the main chat's supervision, nothing deleted. */
@@ -93,22 +84,7 @@ export function leaderItem(s: Session, leader: boolean, deps: ConversationMenuDe
 
 /** Archive is the same reversible action in a sidebar row and the open conversation's title menu (#6565). */
 export function conversationArchiveItem(s: Session, deps: ConversationMenuDeps = conversationMenuDeps): MenuItem {
-  const title = sessionTitle(s);
-  return {
-    key: "archive",
-    label: t("conversation-menu.archive"),
-    icon: "archive",
-    onSelect: async () => {
-      try {
-        await deps.archive(s);
-        // Undo puts it back as it was (an open conversation stays open: its page reads the machine's sessions)
-        deps.notify(t("conversation-menu.archived", { title }), "ok", { label: t("conversation-menu.undo"), run: () => void undoArchive(s, title, deps) });
-      } catch (e) {
-        deps.notify(errorText(e), "error");
-      }
-      reread(deps);
-    },
-  };
+  return baseConversationArchiveItem(s, deps);
 }
 
 export interface ConversationMenuOptions {

@@ -16,14 +16,14 @@ export const DirectionCountsText = memo(function DirectionCountsText({ direction
   const needsYou = countsLabel(direction.counts, t);
   if (!direction.running && !needsYou) return null;
   return (
-    <span title={needsYou || undefined} data-direction-counts data-running={direction.running || undefined} className={cx("flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] text-ink-3 tabular-nums", className)}>
-      {direction.running && <StatusMark state="working" size="sm" />}
-      {needsYou && <span className="font-semibold text-attention">{needsYou}</span>}
+    <span title={needsYou || undefined} data-direction-counts data-running={direction.running || undefined} className={cx("flex min-w-0 shrink-[20] items-center gap-1 whitespace-nowrap text-[11px] text-ink-3 tabular-nums", className)}>
+      {direction.running && <span className="shrink-0"><StatusMark state="working" size="sm" /></span>}
+      {needsYou && <span className="min-w-0 truncate font-semibold text-attention">{needsYou}</span>}
     </span>
   );
 });
 
 /** A task's state word in its tone: 等你 / 待验收 / 卡住 / 在做. */
 export const DirectionStateText = memo(function DirectionStateText({ state }: { state: DirectionTaskState }) {
-  return <span data-task-state={state} className={cx("shrink-0 text-[11px] font-semibold whitespace-nowrap", DIRECTION_STATE_TONE[state])}>{directionStateName(state)}</span>;
+  return <span data-task-state={state} className={cx("min-w-0 shrink-[20] truncate text-[11px] font-semibold whitespace-nowrap", DIRECTION_STATE_TONE[state])}>{directionStateName(state)}</span>;
 });

@@ -17,7 +17,7 @@ import { NARROW, useMedia } from "../lib/viewport";
 import { AGENT_FILTERS, agentFilter, applyFilter, arrangeSpaces, extendKept, filterCounts, isBotmux, isSpaceMuted, matchesFilter, matchingKeys, removeKept, shownFilters, unreadOf, withoutBotmux, type AgentFilter, type FilterCounts } from "../lib/agent-filter";
 import { applyDimensionFilters, buildAgentFacets, DEFAULT_DIMENSION_FILTERS, hasActiveDimensionFilters, type AgentDimensionFilters, type AgentFacetCounts } from "../lib/agent-chatlist-filter";
 import { pagedFilterOf, resetAgentListFilters, setAgentListFilters, useAgentListFilters } from "../lib/agent-list-filters";
-import { AgentChatListRow, AgentFilterButton, AgentFilterChips } from "./agents/AgentChatListControls";
+import { LazyAgentChatListRow as AgentChatListRow, LazyAgentFilterButton as AgentFilterButton, LazyAgentFilterChips as AgentFilterChips } from "./agents/LazyAgentChatListControls";
 import { agentGrouping, AGENT_GROUPINGS, type AgentGrouping, buildAgentGroups, buildSpaces, heldPlace, hostsOf, isHeldSeen, isQuiet, needsSeenOf, sessionHost, splitAgentSessions, type AgentGroup, type Space } from "../lib/agent-groups";
 import { isMuted } from "../lib/session-actions";
 import { heldOrderFor, holdNotedSeen, noteShownUnseen, releaseAllSeen, releaseSeen, useHeldSeenOrder, useSeenRowsMode, useSeenRowsNoticed, useSeenVisit } from "../lib/seen-rows";
@@ -58,9 +58,7 @@ import { Icon } from "../ui/icons";
 import { HubNoticeLine as HubNoticeLineContent } from "./agents/HubNoticeRow";
 import { DeleteSessionDialog, RenameDialog, RenameSpaceDialog } from "./chat/SessionDialogs";
 import { AGENT_ARCHIVES_FEATURE } from "../lib/agent-archives";
-import { AgentRowMenu, MarkSeenDialog as MarkSeenDialogContent, SpaceMenu } from "./AgentMenus";
-import { NodeMenu } from "./NodeMenu";
-import { NodePrompt as NodePromptContent } from "./NodePrompt";
+import { LazyAgentRowMenu as AgentRowMenu, LazyMarkSeenDialog as MarkSeenDialog, LazyNodeMenu as NodeMenu, LazyNodePrompt as NodePrompt, LazySpaceMenu as SpaceMenu } from "./LazyAgentOverlays";
 import { SidebarUsage as SidebarUsageContent } from "./UsageBars";
 import type { MenuNode } from "../lib/node-actions";
 import type { MenuAt } from "../ui/menu-model";
@@ -124,7 +122,6 @@ export const HerdrNotices = memo(function HerdrNotices() {
 
 // Skip parent pushes with unchanged props; each leaf still receives its own state and subscription updates.
 const HubNoticeLine = memo(HubNoticeLineContent);
-const NodePrompt = memo(NodePromptContent);
 const SidebarUsage = memo(SidebarUsageContent);
 const LinkTodoDialog = memo(lazyDialog(() => import("./LinkTodoDialog").then((m) => m.LinkTodoDialog)));
 // Menus and edit controls load on intent; the ordinary sidebar keeps its first-screen budget (#12017).
@@ -132,7 +129,6 @@ const ConversationRowMenu = lazy(() => import("./ConversationRowMenu"));
 const SidebarConversationArrange = lazy(() => import("./assistant/SidebarConversationArrange"));
 const SeenRowsNotice = lazy(() => import("./agents/SeenRowsNotice"));
 const ClearSeenButton = lazy(() => import("./agents/SeenRowsNotice").then((m) => ({ default: m.ClearSeenButton })));
-const MarkSeenDialog = memo(MarkSeenDialogContent);
 
 /** One-time notice floating over the Agents list's foot once a read row stays (#12585): loaded only when shown. */
 function SeenRowsNoticeHost({ shown, onNavigate }: { shown: boolean; onNavigate?: () => void }) {
@@ -252,13 +248,23 @@ function useGlide(activeKey: string) {
     watch();
     const mo = new MutationObserver(() => (ro.disconnect(), watch(), soon()));
     mo.observe(n, { childList: true });
-    // a Collapse's transition ending (it may end without a size change, e.g. its opacity) and scrolling inside the list
+    // a Collapse's transition ending (it may end without a size change, e.g. its opacity) and scrolling inside the list.
+    // Scrolling the list itself leaves every non-sticky row's offset in scroll coordinates invariant (lib/glide.ts), so skip
+    // per-frame getBoundingClientRect/getComputedStyle reads during deep scroll unless the tracked row is sticky or an
+    // inner overflow container scrolled.
+    const onScroll = (e: Event) => {
+      if (e.target === n) {
+        const el = rows.current.get(hovered.current ?? active.current);
+        if (!el || !el.closest("[data-sidebar-sticky]")) return;
+      }
+      soon();
+    };
     n.addEventListener("transitionend", soon);
-    n.addEventListener("scroll", soon, { passive: true, capture: true });
+    n.addEventListener("scroll", onScroll, { passive: true, capture: true });
     return () => {
       events.forEach((e) => n.removeEventListener(e, stop));
       n.removeEventListener("transitionend", soon);
-      n.removeEventListener("scroll", soon, { capture: true });
+      n.removeEventListener("scroll", onScroll, { capture: true });
       mo.disconnect();
       ro.disconnect();
       sizes.current = null;
@@ -495,8 +501,8 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
                 {/* folded, what the leaders have going stays: the working arc while anything under one runs, and their
                     tasks waiting on you (#6626: the arc, never "在做 N" as well) */}
                 {(countsLabel(leaderTotal, t) || (personaFolded && leaderTotal.running)) && (
-                  <span data-direction-counts data-running={leaderTotal.running || undefined} className="flex min-w-0 items-center gap-1 text-[11px] tabular-nums text-ink-3">
-                    {leaderTotal.running && <StatusMark state="working" size="sm" />}
+                  <span data-direction-counts data-running={leaderTotal.running || undefined} className="flex min-w-0 shrink-[20] items-center gap-1 text-[11px] tabular-nums text-ink-3">
+                    {leaderTotal.running && <span className="shrink-0"><StatusMark state="working" size="sm" /></span>}
                     <span className="truncate">{countsLabel(leaderTotal, t)}</span>
                   </span>
                 )}

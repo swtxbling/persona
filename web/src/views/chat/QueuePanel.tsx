@@ -47,6 +47,9 @@ export interface QueuePanelProps {
   /** A phone on its side: one line, "N queued", in the line of the run's status (outside the composer), that opens the
    *  same rows under it. */
   compact?: boolean;
+  /** Single-line dock capsule ("N queued") that opens the queued rows in a floating overlay above the dock so queue
+   *  count changes and expanding/collapsing never shift the chat scroll view. */
+  floating?: boolean;
   /** Controlled queue update handler (`keep` indexes into the own queue), replacing default `inSendOrder` + `api(".../queue")`. */
   onEditQueue?: (keep: number[]) => Promise<QueueEditResult | void> | QueueEditResult | void;
   /** Controlled Send now handler, replacing default `api(".../queue/send-now")`. */
@@ -129,6 +132,7 @@ function QueuePanelBody({
   onAccepted,
   cancelQueued,
   compact,
+  floating,
   onEditQueue,
   onSendNow,
   onRestoreQueued,
@@ -151,8 +155,10 @@ function QueuePanelBody({
   // a Claude or agy takes queued messages at its next step, and can be given them now (#6088, #14871); so does a Persona chat's (#4342)
   const takesNow = canEdit && (session.capabilities?.queue_send_now ?? (!runtime && (session.agent === "claude" || session.agent === "agy" || (persona !== undefined && own > 0))));
   const listId = useId();
+  const popoverId = useId();
   const explainId = useId();
   const region = useRef<HTMLDivElement>(null);
+  const toggleBtn = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const rowEls = useRef(new Map<string, HTMLElement>());
   const handles = useRef(new Map<string, HTMLButtonElement>());
@@ -224,6 +230,16 @@ function QueuePanelBody({
   useEffect(() => {
     dragging.current?.stop();
   }, [queueKey]);
+  // Close the floating queue popover on outside pointer interaction so it never collides with trays or obscures the chat.
+  useEffect(() => {
+    if (!floating || !open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (region.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [floating, open]);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -279,7 +295,8 @@ function QueuePanelBody({
     if (!mounted.current) return;
     const at = document.activeElement;
     if (!hasFinePointer() || !(always || !at || at === document.body || region.current?.contains(at))) return;
-    region.current?.closest("[data-composer-top]")?.parentElement?.querySelector<HTMLElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
+    const container = region.current?.closest("[data-composer-top]")?.parentElement ?? region.current?.closest("[data-chat-dock]");
+    container?.querySelector<HTMLElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
   };
   const editQueue = (keep: number[], isMountedRun: () => boolean): Promise<QueueEditOutcome> => {
     const targetMid = session.machine_id;
@@ -556,17 +573,64 @@ function QueuePanelBody({
       {relayedLine}
     </>
   );
+  const onFloatingKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!floating || !open || e.key !== "Escape" || e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setOpen(false);
+    toggleBtn.current?.focus();
+  };
   return (
     <div
       ref={region}
       role="region"
       aria-label={t("chat-queuepanel.region")}
       data-queue-panel
-      data-queue-strip={compact || undefined}
-      className={cx("w-full", compact ? "rounded-[12px] bg-surface p-1 shadow-card" : "border-b border-line")}
-      style={{ animation: "fade-in 160ms ease-out both" }}
+      data-queue-strip={compact || floating || undefined}
+      onKeyDown={floating ? onFloatingKey : undefined}
+      className={cx(
+        floating ? "shrink-0" : "w-full",
+        !floating && (compact ? "rounded-[12px] bg-surface p-1 shadow-card" : "border-b border-line"),
+      )}
+      style={floating ? undefined : { animation: "fade-in 160ms ease-out both" }}
     >
-      {compact ? (
+      {floating ? (
+        <>
+          <button
+            ref={toggleBtn}
+            type="button"
+            data-queue-toggle
+            aria-expanded={open}
+            aria-controls={popoverId}
+            onClick={() => setOpen((o) => !o)}
+            className={cx(
+              "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium whitespace-nowrap transition-colors",
+              open ? "bg-ink text-surface" : "bg-field text-ink hover:bg-hover",
+            )}
+          >
+            <Icon name="inbox" size={13} className="shrink-0" />
+            <span className="whitespace-nowrap tabular-nums">{t("chat-queuepanel.summary", { count: total })}</span>
+            {optimistic.length > 0 ? (
+              <QueueSendStatus
+                mid={session.machine_id}
+                sid={session.session_id}
+                id={optimistic[0].id}
+                getSendFeedback={getSendFeedback}
+                offline={offline}
+              />
+            ) : busy !== null && <Spinner />}
+            <Icon name="chevron" size={12} stroke={2.2} className={cx("shrink-0 transition-transform duration-200", open && "rotate-180")} />
+          </button>
+          <div
+            id={popoverId}
+            data-queue-popover
+            hidden={!open}
+            className="absolute inset-x-0 bottom-[calc(100%+0.5rem)] z-20 overflow-hidden rounded-card border border-line bg-surface shadow-overlay"
+          >
+            {rowsAndFold}
+          </div>
+        </>
+      ) : compact ? (
         <>
           <button
             type="button"

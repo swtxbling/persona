@@ -2,6 +2,7 @@ import { useState } from "react";
 import { t } from "../../i18n";
 import { api, ApiError, errorText } from "../../lib/api";
 import { archivedMainTitle, NEW_MAIN_PATH, newMainBody } from "../../lib/compaction";
+import { forgetMainCleared, markMainCleared } from "../../lib/main-clear";
 import { navigate } from "../../lib/router";
 import { refreshAssistant } from "../../lib/store";
 import type { Session } from "../../lib/types";
@@ -19,11 +20,15 @@ export function NewMainDialog({ open, onClose, session }: { open: boolean; onClo
   };
   const go = async () => {
     setBusy(true);
+    // Keep the docked conversation layout across early hub pushes and refresh so the composer never jumps to the
+    // centered welcome screen and back when the next message starts the new main chat.
+    markMainCleared(session.session_id);
     try {
       const r = await api<{ ok: boolean; archived?: string; carried?: boolean }>(NEW_MAIN_PATH, { method: "POST", json: newMainBody(carry, session.session_id) });
       await toEmptyMain();
       toast(r.carried ? t("assistant-assistantchat.new_main_done_carried") : t("assistant-assistantchat.new_main_done"), "ok");
     } catch (e) {
+      forgetMainCleared();
       if (e instanceof ApiError && e.code === "main_changed") {
         // another device replaced it: show what the hub has now
         await toEmptyMain();

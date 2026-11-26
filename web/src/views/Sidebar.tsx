@@ -473,7 +473,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
         {/* the main conversation is the column's first row, Main chat with the home symbol, and only there (#2004, #5109); it
             stays at the top while the rest scrolls (#5581), with a solid divider above the sticky groups */}
         <div data-sidebar-sticky className="sticky top-0 z-30 flex flex-col gap-px bg-canvas pt-1">
-          <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} chord={bindings.persona} waiting={mainWaiting.count} onMenu={onConvMenu} />
+          <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={assistant?.main ? (conversationOf(assistant.main) ?? mainConversation) : mainConversation} chord={bindings.persona} waiting={mainWaiting.count} onMenu={onConvMenu} />
           <span aria-hidden data-persona-divider className="mx-2 my-1 h-px shrink-0 bg-line" />
         </div>
         {/* a phone's drawer has Pages as its grid of icons; every other group (#9071) is a section, as on a wide screen */}
@@ -554,7 +554,24 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
       </div>
       <SeenRowsNoticeHost shown={holdsSeen} onNavigate={onNavigate} />
       </div>
-      {convMenu && <Suspense fallback={null}><ConversationRowMenu s={convMenu.s} main={convMenu.s.session_id === assistant?.main} leader={isLeader(convMenu.s.session_id)} builtIn={isBackgroundSupervisor(assistant, convMenu.s.session_id)} anchor={convMenu.anchor} at={convMenu.at} onClose={() => setConvMenu(null)} onArrange={ownChats.includes(convMenu.s) ? () => setArranging(true) : undefined} /></Suspense>}
+      {convMenu && (() => {
+        const activeSession = conversationOf(convMenu.s.session_id) ?? convMenu.s;
+        return (
+          <Suspense fallback={null}>
+            <ConversationRowMenu
+              s={activeSession}
+              main={activeSession.session_id === assistant?.main}
+              leader={isLeader(activeSession.session_id)}
+              builtIn={isBackgroundSupervisor(assistant, activeSession.session_id)}
+              anchor={convMenu.anchor}
+              at={convMenu.at}
+              onClose={() => setConvMenu(null)}
+              onNavigate={onNavigate}
+              onArrange={ownChats.includes(activeSession) ? () => setArranging(true) : undefined}
+            />
+          </Suspense>
+        );
+      })()}
       {/* subscription rate-limit windows (#2432): nothing is drawn without data */}
       <SidebarUsage />
       <NodePrompt />

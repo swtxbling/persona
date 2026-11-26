@@ -1193,8 +1193,12 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
       landing.current = null;
     };
     const onClick = (e: MouseEvent) => {
-      const el = e.target instanceof Element ? e.target.closest("button[aria-expanded]") : null;
+      const el = e.target instanceof Element ? e.target.closest('button[aria-expanded], [role="button"][aria-expanded]') : null;
       if (!el || !sc.contains(el)) return;
+      if (el.tagName !== "BUTTON" && el.getAttribute("aria-expanded") === "true") {
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed && sel.anchorNode && el.contains(sel.anchorNode)) return;
+      }
       drop();
       clearTimeout(resume);
       const was = atEnd.current;

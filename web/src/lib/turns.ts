@@ -108,19 +108,39 @@ export interface Segment {
   ttftMs?: number;
 }
 
-function blockPart(id: string) {
-  return Number(id.split("#")[1] ?? 0);
+const BLOCK_INT_RE = /^-?\d+$/;
+const BLOCK_TOOL_RE = /^tool(\d+)$/;
+const BLOCK_MEDIA_RE = /^media(\d+)$/;
+
+function blockRank(id: string): { group: number; index: number; raw: string } {
+  const hash = id.indexOf("#");
+  const raw = hash < 0 ? "" : id.slice(hash + 1);
+  if (raw === "") return { group: 0, index: 0, raw };
+  if (BLOCK_INT_RE.test(raw)) return { group: 0, index: Number(raw), raw };
+  if (raw === "thinking") return { group: 1, index: 0, raw };
+  if (raw === "text") return { group: 2, index: 0, raw };
+  const tool = BLOCK_TOOL_RE.exec(raw);
+  if (tool) return { group: 3, index: Number(tool[1]), raw };
+  const media = BLOCK_MEDIA_RE.exec(raw);
+  if (media) return { group: 4, index: Number(media[1]), raw };
+  if (raw === "turn_duration") return { group: 5, index: 0, raw };
+  return { group: 6, index: 0, raw };
 }
 
-function blockOrder(a: Pick<Item, "id" | "seq">, b: Pick<Item, "id" | "seq">) {
+export function blockOrder(a: Pick<Item, "id" | "seq">, b: Pick<Item, "id" | "seq">): number {
   if (a.seq !== b.seq) return a.seq - b.seq;
-  return blockPart(a.id) - blockPart(b.id);
+  const ra = blockRank(a.id);
+  const rb = blockRank(b.id);
+  if (ra.group !== rb.group) return ra.group - rb.group;
+  if (ra.index !== rb.index) return ra.index - rb.index;
+  if (ra.group !== 6) return 0;
+  return ra.raw < rb.raw ? -1 : ra.raw > rb.raw ? 1 : 0;
 }
 
-/** Fold bounds are seq + numeric block, not seq alone: a final answer can share the fold's last line. */
+/** Fold bounds are seq + block rank, not seq alone: a final answer can share the fold's last line. */
 export function insideFold(i: Item, f: Item) {
   if (!f.fold || blockOrder(i, f) < 0 || i.seq > f.fold.through_seq) return false;
-  return i.seq < f.fold.through_seq || !f.fold.through_id || blockPart(i.id) <= blockPart(f.fold.through_id);
+  return i.seq < f.fold.through_seq || !f.fold.through_id || blockOrder(i, { seq: f.fold.through_seq, id: f.fold.through_id }) <= 0;
 }
 
 export function sortItems(items: Item[]): Item[] {

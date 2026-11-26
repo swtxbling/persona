@@ -3,7 +3,7 @@
 // ("Thinking...", "Bash running...", "Spawning agent..."); Persona works it out from the newest steps it has.
 import { canonicalTool } from "./compatibility";
 import { subagentFor } from "./tasks";
-import type { ChatLine, Segment, Step } from "./turns";
+import { blockOrder, type ChatLine, type Segment, type Step } from "./turns";
 import type { AgentState, Item, Session, Subagent } from "./types";
 
 export interface RunStep {
@@ -19,7 +19,7 @@ export interface RunStep {
 const SUBAGENT_TOOLS = new Set(["Agent", "Task"]);
 
 /** Item order as the transcript has it (lib/turns.ts blockOrder): its line, then its block in the line. */
-const after = (a: Item, b: Item) => a.seq !== b.seq ? a.seq > b.seq : Number(a.id.split("#")[1] ?? 0) > Number(b.id.split("#")[1] ?? 0);
+const after = (a: Item, b: Item) => blockOrder(a, b) > 0;
 
 const stepItem = (s: Step): Item => (s.kind === "tool" ? s.use : s.item);
 

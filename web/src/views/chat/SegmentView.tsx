@@ -268,9 +268,11 @@ const ANSWER = "[&_.prose-j]:text-[length:var(--chat-body)]! [&_.prose-j]:leadin
  *  it); only a finished turn's last reply has the bar under it (`bar`, #5314).
  *  Memo'd: the chat context changes with every streamed item, so each SegmentView re-renders; a finished answer's
  *  props stay the same and it is skipped (#3024). */
-export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, stripCloseout, bar, cut, usage, usageMs, ttftMs }: {
+export const Answer = memo(function Answer({ item, streaming, liveText, mid, sid, fade, stripCloseout, bar, cut, usage, usageMs, ttftMs }: {
   item?: Item;
   streaming?: string;
+  /** In-place item text updates while the turn is live (e.g., Antigravity): stream incrementally without delta. */
+  liveText?: boolean;
   mid?: string;
   sid?: string;
   fade?: boolean;
@@ -286,14 +288,15 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, st
   ttftMs?: number;
 }) {
   // a long answer the hub cut for the page: its start, and "View full text" under it
-  const live = streaming !== undefined;
-  const full = useFullText(live ? undefined : item, mid, sid);
+  const isDelta = streaming !== undefined;
+  const isStreaming = isDelta || Boolean(liveText);
+  const full = useFullText(isDelta ? undefined : item, mid, sid);
   const text = streaming ?? (stripCloseout ? stripCloseout(full.text, !item?.full_size || (Boolean(mid && sid) && !full.more)) : full.text);
   if (!text) return null;
   const cwd = mid && sid ? getSession(mid, sid)?.cwd : undefined;
   return (
     <MessageActions text={text} ts={item?.ts} itemId={item?.id} bar={bar} usage={bar ? usage : undefined} usageMs={bar ? usageMs : undefined} ttftMs={bar ? ttftMs : undefined}
-      starSource={!live && mid && sid && item?.id ? { mid, sid, item: item.id, fingerprint: item.source_fingerprint } : undefined}
+      starSource={!isDelta && mid && sid && item?.id ? { mid, sid, item: item.id, fingerprint: item.source_fingerprint } : undefined}
       translationSource={item?.full_size ? {
         key: JSON.stringify([mid, sid, item.id, item.text, item.full_size, item.source_fingerprint, Boolean(stripCloseout)]),
         load: async () => {
@@ -302,15 +305,15 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, st
         },
       } : undefined}>
       {cut && <p className="mb-1 text-[13px] leading-[1.384615] text-ink-2" data-cut-short>{t("chat-messageactions.cut_short")}</p>}
-      <div className={ANSWER} data-answer={live ? "streaming" : true} data-source-fingerprint={item?.source_fingerprint} data-items={item?.id}>
+      <div className={ANSWER} data-answer={isDelta ? "streaming" : true} data-source-fingerprint={item?.source_fingerprint} data-items={item?.id}>
         {/* the cards in it are this item's blocks (ui/AssistantCard.tsx): `<item id>/<n>` */}
         <CardItem.Provider value={item?.id ? { id: item.id, text } : null}>
-          <Markdown text={text} mid={mid} cwd={cwd} streaming={live || undefined} fade={fade || undefined} lineBreaks />
+          <Markdown text={text} mid={mid} cwd={cwd} streaming={isStreaming || undefined} fade={fade || undefined} lineBreaks />
         </CardItem.Provider>
       </div>
       {full.more}
-      {!live && mid && sid && <LazyReplyFiles text={text} mid={mid} cwd={cwd} />}
-      {!live && mid && sid && <LazyReplyPorts text={text} mid={mid} sid={sid} cwd={cwd} />}
+      {!isStreaming && mid && sid && <LazyReplyFiles text={text} mid={mid} cwd={cwd} />}
+      {!isStreaming && mid && sid && <LazyReplyPorts text={text} mid={mid} sid={sid} cwd={cwd} />}
     </MessageActions>
   );
 });
@@ -318,13 +321,13 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, st
 /** Freshness reaches only the single visible persisted text, not every paragraph hidden in its execution summary: it
  *  reads its own id (fresh-words.ts), so a new reply renders these words, not every exchange. `done`: its turn is over,
  *  so the words have the bar under them (cindy: never while the turn runs). */
-const LatestAnswer = memo(function LatestAnswer({ item, streaming, mid, sid, noCloseout, done, cut, usage, usageMs, ttftMs }: { item?: Item; streaming?: string; mid: string; sid: string; noCloseout?: boolean; done?: boolean; cut?: boolean; usage?: string; usageMs?: number; ttftMs?: number }) {
+const LatestAnswer = memo(function LatestAnswer({ item, streaming, liveText, mid, sid, noCloseout, done, cut, usage, usageMs, ttftMs }: { item?: Item; streaming?: string; liveText?: boolean; mid: string; sid: string; noCloseout?: boolean; done?: boolean; cut?: boolean; usage?: string; usageMs?: number; ttftMs?: number }) {
   const persisted = streaming === undefined ? item?.id : undefined;
   const fresh = useFreshWords(mid, sid, persisted);
   const bar = Boolean(done && persisted);
   const stripCloseout = useCloseoutReader(Boolean(noCloseout));
   if (stripCloseout && item?.text?.trim() && !item.full_size && !stripCloseout(item.text)) return null;
-  return <div data-latest-text><Answer item={item} streaming={streaming} mid={mid} sid={sid} fade={persisted ? fresh : undefined} stripCloseout={stripCloseout} bar={bar || undefined} cut={cut} usage={bar ? usage : undefined} usageMs={bar ? usageMs : undefined} ttftMs={bar ? ttftMs : undefined} /></div>;
+  return <div data-latest-text><Answer item={item} streaming={streaming} liveText={liveText} mid={mid} sid={sid} fade={persisted ? fresh : undefined} stripCloseout={stripCloseout} bar={bar || undefined} cut={cut} usage={bar ? usage : undefined} usageMs={bar ? usageMs : undefined} ttftMs={bar ? ttftMs : undefined} /></div>;
 });
 
 export const SegmentView = memo(function SegmentView({
@@ -478,7 +481,7 @@ export const SegmentView = memo(function SegmentView({
       {imageStrip}
       {!trace && toolViews.length > 0 && <Suspense key="tool-views" fallback={null}><ToolViews views={toolViews} /></Suspense>}
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
-      {(latestItem || streaming !== undefined) && <Suspense key="latest-text" fallback={null}><LatestAnswer item={streaming === undefined ? latestItem : undefined} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={(!live && !busy) || undefined} cut={(!live && seg.cut) || undefined} usage={usage} usageMs={usageMs} ttftMs={!live && !trace ? seg.ttftMs : undefined} /></Suspense>}
+      {(latestItem || streaming !== undefined) && <Suspense key="latest-text" fallback={null}><LatestAnswer item={streaming === undefined ? latestItem : undefined} streaming={streaming} liveText={(live && streaming === undefined && last?.kind === "text" && last.item.id === latestItem?.id) || undefined} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={(!live && !busy) || undefined} cut={(!live && seg.cut) || undefined} usage={usage} usageMs={usageMs} ttftMs={!live && !trace ? seg.ttftMs : undefined} /></Suspense>}
       {sourced && <Suspense key="turn-sources" fallback={null}><TurnSources steps={own} /></Suspense>}
       {changes && <LazyTurnChanges key="turn-changes" changes={changes} mid={mid} sid={sid} cwd={cwd} />}
       </Fragment> : <div className="whitespace-pre-wrap" style={{ blockSize: "var(--seg-est)" }} data-segment-placeholder>{placeholder}</div>}

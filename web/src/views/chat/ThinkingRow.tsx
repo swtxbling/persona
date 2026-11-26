@@ -25,17 +25,24 @@ export function ThinkingRow({ item, scope = "" }: { item: Item; scope?: string }
   const [open, setOpen] = useExpanded(`${scope}thinking:${item.id}`);
   const [overflows, setOverflows] = useState(false);
   const text = useRef<HTMLSpanElement>(null);
-  // whether one line holds it: measured on the line itself, again whenever its width changes
+  const hasWords = words.length > 0;
+  // whether one line holds it: measured on the line itself (skipped once opened or already multi-line)
   useLayoutEffect(() => {
     const el = text.current;
-    if (open || !el) return;
-    const measure = () => setOverflows(el.scrollWidth > el.clientWidth + 1);
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const watch = new ResizeObserver(measure);
+    if (open || lineBreak || !el) return;
+    const next = el.scrollWidth > el.clientWidth + 1;
+    setOverflows((prev) => (prev === next ? prev : next));
+  }, [words, open, lineBreak]);
+  useLayoutEffect(() => {
+    const el = text.current;
+    if (open || lineBreak || !el || typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(() => {
+      const next = el.scrollWidth > el.clientWidth + 1;
+      setOverflows((prev) => (prev === next ? prev : next));
+    });
     watch.observe(el);
     return () => watch.disconnect();
-  }, [words, open]);
+  }, [hasWords, open, lineBreak]);
   const opens = open || lineBreak || overflows;
   // tokenized once: what it draws and its hover text
   const tokens = useMemo(() => tokenizeThinkingText(open ? raw : words), [open, raw, words]);

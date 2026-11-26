@@ -74,14 +74,19 @@
   scroll-padding-top: calc(var(--sidebar-sticky-top, 0px) + var(--sidebar-controls-height, 0px) + var(--sidebar-row));
 }
 
-/* Assistant trays (#4656): an open one lets the dock (ChatView's DOCK_MAX) take most of what is visible, the chat above
-   giving up the room, and fills only what it needs; expanded, it fills the chat column and the chat steps aside. Count
-   meters use the small line token. */
-[data-chat-dock]:has(.assistant-action-tray) { max-height: var(--assistant-dock-open-max); }
-[data-chat-dock]:has(.assistant-action-tray[data-expanded]) { height: var(--kb-h); max-height: none; min-height: 0; }
-[data-chat-dock]:has(.assistant-action-tray[data-expanded]) > [data-chat-dock-above],
-[data-assistant-actionbar]:has(> .assistant-action-tray[data-expanded]),
-.assistant-action-tray[data-expanded] { flex-grow: 1; }
+/* Assistant trays (#4656): float above the action bar so opening, closing, or expanding a tray never changes the
+   dock height or shifts the chat scroll view. Count meters use the small line token. */
+.assistant-action-tray {
+  position: absolute;
+  inset-inline: 0;
+  bottom: calc(100% + 0.5rem);
+  z-index: 20;
+  max-height: min(var(--assistant-dock-open-max), max(10rem, calc(var(--kb-h) - 13.5rem)));
+}
+.assistant-action-tray[data-expanded] {
+  height: min(var(--assistant-dock-open-max), max(10rem, calc(var(--kb-h) - 13rem)));
+  max-height: min(var(--assistant-dock-open-max), max(10rem, calc(var(--kb-h) - 13rem)));
+}
 /* a plan card's Start row, stuck to the tray's bottom edge, keeps a hairline over what scrolls under it */
 .assistant-action-tray [data-plan-actions] { box-shadow: 0 -1px 0 var(--line); }
 .task-count-meter { height: var(--task-count-meter-height); }

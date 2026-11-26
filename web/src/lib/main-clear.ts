@@ -25,10 +25,10 @@ export function isClearCommand(text: string, images: number): boolean {
   return images === 0 && text.trim().toLowerCase() === "/clear";
 }
 
-// ── the conversation this tab cleared, while the main one is still to start ──
+// ── the conversation this tab cleared or replaced, while the next main one is still to start ──
 // The page keeps the conversation's layout for it (an empty chat, the composer at the bottom), for the manager it was
 // cleared under only. Another main conversation of that manager in the store forgets it, whether the page is open or
-// not, so a later "New main chat" or another device's change shows the ordinary start page.
+// not, so another device's change shows the ordinary start page.
 
 const NONE = { manager: "", sid: "" };
 let cleared = NONE;
@@ -50,6 +50,11 @@ function setCleared(next: { manager: string; sid: string }) {
     unwatch = null;
   }
   listeners.forEach((l) => l());
+}
+
+/** Keeps the docked conversation layout while this tab clears or replaces main conversation `sid`. */
+export function markMainCleared(sid: string) {
+  setCleared({ manager: currentManager(), sid });
 }
 
 export function forgetMainCleared() {

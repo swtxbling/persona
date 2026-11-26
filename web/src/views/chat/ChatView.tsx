@@ -2386,11 +2386,11 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   // ✓ Done only for a turn that finished: one waiting on you, stopped or cut off by an error keeps its last words
   const done = !detached && turnDone(state, session, lastLine, tr.items);
   const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={runningWorking} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} onStop={sessionCan(session, "interrupt") ? interrupt : undefined} /> : null;
-  // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
-  // the run's status. The same element while nothing in it changes: the composer is memoized.
+  // Keep the queued-messages control as a single-line capsule whose list floats above the dock so queue count
+  // changes and expand/collapse never resize the dock or shift the chat scroll view.
   const queue = useMemo(
-    () => (session && hasQueue ? <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} pending={queueCandidates} optimistic={optimisticQueue} memory={queueMemory} onAccepted={queuedAccepted} cancelQueued={cancelQueued} /> : null),
-    [session, hasQueue, draftKey, canCompose, short, assistant, persona.name, queueCandidates, optimisticQueue, queuedAccepted, cancelQueued],
+    () => (session && hasQueue ? <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} floating persona={assistant ? persona.name : undefined} pending={queueCandidates} optimistic={optimisticQueue} memory={queueMemory} onAccepted={queuedAccepted} cancelQueued={cancelQueued} /> : null),
+    [session, hasQueue, draftKey, canCompose, assistant, persona.name, queueCandidates, optimisticQueue, queuedAccepted, cancelQueued],
   );
   // with the plan's pill showing, "Jump to bottom" goes beside it (over the chat, they hid each other); the pill keeps
   // one wrapper either way, so a flyout pinned open on it stays when the reader scrolls
@@ -2859,13 +2859,11 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
             cards, task questions and notes stood taller than the dock, drawn up over the chat or pushing it to nothing);
             the box clips what is in it, so its children keep a little room for their shadows (p-1; -m-1 gives it back) */}
         <div ref={dockAbove} data-chat-dock-above data-scroll-box hidden={Boolean(picker)} className="-m-1 flex min-h-0 shrink flex-col gap-2 overflow-y-auto overscroll-contain p-1 empty:hidden">
-        {/* a phone on its side: the plan's pill, the run's status and the queue share one line. One wrapper either way
-            (no box of its own otherwise), so the pill and a flyout pinned on it stay when the phone turns */}
-        {(pills || running || (short && queue)) && (
+        {/* Assistant plan pills and running status keep one wrapper across short/tall turns so pinned flyouts stay open. */}
+        {assistant && (pills || running) && (
           <div className={short ? "flex shrink-0 items-center gap-2" : "contents"}>
             {pills && <div className={short ? "shrink-0" : "contents"}>{pills}</div>}
             {running && <div className={short ? "shrink-0" : "contents"}>{running}</div>}
-            {short && queue && <div className="min-w-0 flex-1">{queue}</div>}
           </div>
         )}
         {assistant && (
@@ -2875,7 +2873,6 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
                 of the sessions folded under it are in the chat under the bar (#4883, as iOS): Needs you counts them and
                 lists a row for each that closes the tray onto its card. */}
             <TurnCards asks={turnSplit.turn} />
-            {!takeover && <AssistantActionBar key={sid} conversation={sid} ownAsks={isMain ? docked : trayAsks} />}
             {!takeover && <RouteChip conversation={sid} />}
             {/* items handed to this conversation that are still open: "Wrap up" asks it for the final write-back (#5932) */}
             {!takeover && isMain && <Suspense fallback={null}><LazyWrapUpChips conversation={sid} /></Suspense>}
@@ -2939,6 +2936,32 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
         {/* the goal it works toward, right over the composer as cindy's goal indicator (#5421) */}
         {session?.goal && !assistant && <Suspense fallback={null}><GoalBar goal={session.goal} /></Suspense>}
         </div>
+        {/* Keep the action bar and floating queue control outside dockAbove's scroll clipping in one full-width
+            relative row so open trays and queue popovers float above the dock without changing dock height. */}
+        {assistant && !takeover && !picker && (
+          <div data-chat-dock-bar className="relative flex shrink-0 items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <AssistantActionBar key={sid} conversation={sid} ownAsks={isMain ? docked : trayAsks} />
+            </div>
+            {queue}
+          </div>
+        )}
+        {!picker && !assistant && (pills || running || queue) && (
+          <div data-chat-dock-bar className={cx("relative flex shrink-0 gap-2", short ? "items-center" : "flex-col")}>
+            {pills && <div className={short ? "shrink-0" : "contents"}>{pills}</div>}
+            {(running || queue) && (
+              <div className={short ? "contents" : "flex min-w-0 items-center gap-2"}>
+                {running && <div className={short ? "shrink-0" : "min-w-0 flex-1"}>{running}</div>}
+                {queue}
+              </div>
+            )}
+          </div>
+        )}
+        {!picker && assistant && takeover && queue && (
+          <div data-chat-dock-bar className="relative flex shrink-0 items-center gap-2">
+            {queue}
+          </div>
+        )}
         {composerAction.slot}
         {chatBar.bar("composer")}
         {/* picking messages to forward (#3838): the bar in the composer's place, which stays with its draft */}
@@ -3003,7 +3026,6 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
           trailing={trailing}
           planMode={planMode}
           action={composerAction.action}
-          top={short ? undefined : queue}
         />
         )}
         {!stoppedLine && !codexReadOnlyLine && session && (

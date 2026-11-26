@@ -49,31 +49,44 @@ extension AppModel {
         }
     }
 
-    /// Archives the main conversation and leaves none: back on the empty main page, the next message starts the new
-    /// one (with the old one's summary in front of it when `carry`). False when the hub refused (the toast says why).
+    /// Archives the main conversation and leaves none: transitions directly to the empty main page (`MainClearState`)
+    /// so the next message starts the new one (with the old one's summary in front of it when `carry`) without flashing
+    /// the welcome/needs-you home screen. False when the hub refused (the toast says why).
     func startNewMain(carry: Bool) async -> Bool {
         guard let main = assistantMain, let api = api(main.group) else { return false }
+        var state = mainClear
+        guard state.begin(group: main.group, manager: assistantManagerID ?? "", sessionID: main.sessionID) else { return true }
+        mainClear = state
+        // Looking at the main conversation, or already on the empty page: stay there. A side conversation stays put.
+        let viewing = assistantCurrent == main || assistantCurrent == nil
         do {
             let r = try await api.newMainConversation(carry: carry, expect: main.sessionID)
-            await toEmptyMain()
+            var done = mainClear
+            done.succeed()
+            mainClear = done
+            if viewing, assistantCurrent == main { assistantCurrent = nil }
+            await refreshAssistant()
+            if viewing, assistantCurrent == nil || assistantCurrent == main { assistantCurrent = nil }
             Haptics.success()
             toast = Toast(r.carried == true ? String(localized: "New main chat started. It'll include a summary of the old one.") : String(localized: "New main chat started"), style: .success)
             return true
         } catch let e as APIError where e.code == "main_changed" {
             // Another device replaced it already: show what the hub has now.
-            await toEmptyMain()
+            var dropped = mainClear
+            dropped.fail()
+            mainClear = dropped
+            await refreshAssistant()
+            if viewing { assistantCurrent = assistantMain }
             toast = Toast(String(localized: "The main chat was replaced on another device. Refreshed."), style: .info)
             return true
         } catch {
+            var dropped = mainClear
+            dropped.fail()
+            mainClear = dropped
             Haptics.error()
             toast = Toast(String(localized: "Couldn't start a new chat: \(error.shown ?? String(localized: "Try again later."))"), style: .error)
             return false
         }
-    }
-
-    private func toEmptyMain() async {
-        assistantCurrent = nil
-        await refreshAssistant()
     }
 
     /// Archives the main conversation and leaves the empty conversation page (the same top bar and composer, nothing

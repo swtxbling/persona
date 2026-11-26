@@ -9,7 +9,7 @@ import SwiftUI
 /// shapes, so focus and the IME's marked text survive the change; so are + and the mic (voice and stop too), which move
 /// with the box between the shapes (`ComposerBoxLayout`, #7278). Only what the card alone has comes and goes.
 /// The callers keep their own state (drafts, uploads, SendSafety in `Composer`; the starter's text in StarterComposer).
-struct ShellComposerBar<Attach: View, Modes: View>: View {
+struct ShellComposerBar<Attach: View, Modes: View, Top: View>: View {
     var placeholder: String
     @Binding var text: String
     @Binding var selection: TextSelection?
@@ -48,6 +48,8 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     var send: () -> Void
     @ViewBuilder var attach: () -> Attach
     @ViewBuilder var modes: () -> Modes
+    /// Composer-bound accessories fused into the top edge of the card surface (queued messages, task routing).
+    @ViewBuilder var top: () -> Top
     @State private var dictation = Dictation()
     @Environment(\.buiTheme) private var theme
     #if os(iOS)
@@ -248,17 +250,24 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         let erased = AnyView(box)
         #endif
         // Erased (#6735): generic, so every intermediate of the chain below took a run-time-sized stack slot holding the box.
-        erased
-        .padding(.horizontal, expanded ? 0 : Theme.Space.xs)
-        .padding(.vertical, expanded ? 0 : Theme.Space.xxs)
-        .modifier(ComposerSurface())
+        let input = erased
+            .padding(.horizontal, expanded ? 0 : Theme.Space.xs)
+            .padding(.vertical, expanded ? 0 : Theme.Space.xxs)
+            .contentShape(.rect(cornerRadius: Theme.Shell.composerRadius))
+            .onTapGesture { if !barOn { focused.wrappedValue = true } }
+        VStack(alignment: .leading, spacing: 0) {
+            // Top-corner clipping is applied to each inline header inside `ComposerTopSlot` rather than here so
+            // floating popovers (such as expanded queued messages) anchored to the top slot are never clipped.
+            top()
+                .zIndex(1)
+            input
+        }
+        .modifier(ComposerSurface(clipsContent: false))
         #if os(iOS)
         .overlay { ComposerHoldOverlay(hold: hold) }
         .coordinateSpace(.named(ComposerHold.space))
         #endif
         .composerGlow(glows)
-        .contentShape(.rect(cornerRadius: Theme.Shell.composerRadius))
-        .onTapGesture { if !barOn { focused.wrappedValue = true } }
         .shellScaled()
         .animation(openMotion, value: expanded)
         .animation(Theme.Motion.state, value: canSend)
@@ -667,6 +676,27 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     }
 }
 
+extension ShellComposerBar where Top == EmptyView {
+    init(placeholder: String, text: Binding<String>, selection: Binding<TextSelection?>,
+         focused: FocusState<Bool>.Binding, canSend: Bool, hasAttachments: Bool = false,
+         stop: (() -> Void)? = nil, voice: (() -> Void)? = nil, voiceLabel: String? = nil,
+         modesTitle: SessionModes.ComposerTitle? = nil, modesDisclosure: Bool = false,
+         quotes: Binding<[ContextRef]>? = nil, gate: SendGate? = nil,
+         openAttach: ((CGRect) -> Void)? = nil, glows: Bool = false,
+         dictationHints: @escaping () -> [String] = { [] },
+         dictationRequest: DictationRequest? = nil, takeDictation: ((DictationRequest) -> Bool)? = nil,
+         send: @escaping () -> Void,
+         @ViewBuilder attach: @escaping () -> Attach,
+         @ViewBuilder modes: @escaping () -> Modes) {
+        self.init(placeholder: placeholder, text: text, selection: selection, focused: focused, canSend: canSend,
+                  hasAttachments: hasAttachments, stop: stop, voice: voice, voiceLabel: voiceLabel,
+                  modesTitle: modesTitle, modesDisclosure: modesDisclosure, quotes: quotes, gate: gate,
+                  openAttach: openAttach, glows: glows, dictationHints: dictationHints,
+                  dictationRequest: dictationRequest, takeDictation: takeDictation, send: send,
+                  attach: attach, modes: modes, top: { EmptyView() })
+    }
+}
+
 /// The box's two shapes in one layout (#7278), so + and the mic (voice and stop too) are each one view that moves with
 /// the box as it opens and closes, in the box's own motion, rather than one leaving and another arriving. Subviews: the
 /// field (with the quotes over it), what sits at the box's leading corner, what sits at its trailing corner. The line: the
@@ -728,9 +758,18 @@ private struct ComposerBoxLayout: Layout {
 /// The composer's surface: the white card with its stroke and shadow, or in the BeautifulUI style its raised surface.
 /// The voice bar wears it too (it takes the composer's place in a call, docs/assistant/voice.md 6.2).
 struct ComposerSurface: ViewModifier {
+    /// Set to false when the composer hosts overlays (such as the expanded queue drawer) that extend above its bounds.
+    var clipsContent = true
+
     func body(content: Content) -> some View {
         if AppStyle.current.usesBeautifulUI {
-            content.buiSurface(radius: Theme.Shell.composerRadius, elevation: .raised)
+            if clipsContent {
+                content.buiSurface(radius: Theme.Shell.composerRadius, elevation: .raised)
+            } else {
+                content.background {
+                    Color.clear.buiSurface(radius: Theme.Shell.composerRadius, elevation: .raised)
+                }
+            }
         } else {
             content
                 .background {

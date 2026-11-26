@@ -2296,7 +2296,22 @@ struct ChatView: View {
                 // What the footer takes of the page: the pending cards grow into the rest while the keyboard is up.
                 // Exact, like the cards' own height inside it (`PendingCards.shown`): the cards take one from the other for
                 // what the footer holds besides them, which must not move with their own height (#1580).
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerRoom.footer = $0 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                    let old = scratch.footerHeight
+                    scratch.footerHeight = h
+                    footerRoom.footer = h
+                    guard old > 0 else { return }
+                    let d = old - h
+                    guard abs(d) >= 0.5 else { return }
+                    if abs(scratch.pendingListEdgeDelta - d) < 2 {
+                        scratch.pendingListEdgeDelta = 0
+                        scratch.pendingFooterDelta = 0
+                        applyFooterResize(d)
+                    } else {
+                        scratch.pendingListEdgeDelta = 0
+                        scratch.pendingFooterDelta += d
+                    }
+                }
         }
         // The height the page offers, even when what is in it is taller: the pending cards size themselves by it. A
         // frame with both bounds takes the offered size whatever the content (not a design value: no token for it).
@@ -2304,7 +2319,10 @@ struct ChatView: View {
         // A floating keyboard floats over the page: the composer stays at the bottom, the list keeps its height (#2565).
         .keepsHeightUnderUndockedKeyboard()
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-            if abs(footerRoom.height - h) >= 1 { footerRoom.height = h }
+            if abs(footerRoom.height - h) >= 1 {
+                footerRoom.height = h
+                scratch.pendingListEdgeDelta = 0
+            }
         }
         // As short as the list may get while the keyboard is up: the header over it (folded or not) and the hairline above
         // it. The cards take the rest (#1912).
@@ -2831,11 +2849,11 @@ struct ChatView: View {
         }
         // Out of the way of a voice call (docs/assistant/voice.md 6.2「通话期间」), back when it ends.
         HiddenDuringCall(key: key) {
-            // Needs You / In Progress in the dock's capsules, each opening its tray (#3393), on every device.
+            // Needs You (always visible), In Progress and neutral Wrap Up in one row (#3393, #16165); Finished opens
+            // from the tray header instead of staying persistent on the collapsed bar.
             AssistantActionBar(conversation: conversation, key: key, computer: computerActivity, dock: dock, dockOwn: own)
-            RouteChip(conversation: conversation)
-            // Items handed to the main conversation that are still open: "Wrap up" asks it for the final write-back (#5932).
-            if model.assistantMain == key { WrapUpChips(key: key) }
+            // When using `ShellComposerBar`, task routing lives in `ComposerTopSlot` fused to the composer's top edge.
+            if !usesShellComposer { RouteChip(conversation: conversation) }
         }
     }
 
@@ -2946,14 +2964,17 @@ struct ChatView: View {
                         openNext(next)
                     }
                 }
-                let queued = session?.queued ?? []
-                let sending = pendingPlacement.strip
-                if !queued.isEmpty || !sending.isEmpty, style == .dev || session?.assistant == true {
-                    QueueStrip(key: key, queued: queued, own: session?.ownQueuedCount ?? queued.count, sending: sending,
-                               photoMarks: model.chat(key).queuePhotoMarks,
-                               steers: session?.steersQueue == true || (session?.assistant == true && session?.canSend == true),
-                               persona: session?.assistant == true ? model.assistantShownName : nil,
-                               agentName: session?.agentLabel ?? "Claude")
+                let assistantTopSlot = style == .assistant && viewing == nil && usesShellComposer && session?.isStopped != true
+                if !assistantTopSlot {
+                    let queued = session?.queued ?? []
+                    let sending = pendingPlacement.strip
+                    if !queued.isEmpty || !sending.isEmpty, style == .dev || session?.assistant == true {
+                        QueueStrip(key: key, queued: queued, own: session?.ownQueuedCount ?? queued.count, sending: sending,
+                                   photoMarks: model.chat(key).queuePhotoMarks,
+                                   steers: session?.steersQueue == true || (session?.assistant == true && session?.canSend == true),
+                                   persona: session?.assistant == true ? model.assistantShownName : nil,
+                                   agentName: session?.agentLabel ?? "Claude")
+                    }
                 }
                 // The newest plan while its line is out of view (#5602): which step of how many; tap, the whole plan.
                 // Folded while a card asks something (#2970): it sat over the card's buttons.
@@ -3008,7 +3029,8 @@ struct ChatView: View {
                 }
                 if session?.isStopped != true { // a stopped Agent takes no messages: its line above says so (#4754)
                     AnyView(Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.assistantShownName)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
-                             covered: link != nil, onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 }, pickMode: { requestMode($0) },
+                             covered: link != nil, assistantChrome: style == .assistant && viewing == nil,
+                             onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 }, pickMode: { requestMode($0) },
                              openAssistantModel: openAssistantModel)
                         // The shell's expanding field stays in the page's layout graph; so does BeautifulUI's prompt bar,
                         // whose menus hang above it: an island's hosting view takes no touches outside its bounds.
@@ -3291,12 +3313,21 @@ struct ChatView: View {
             let old = scratch.listFrame
             scratch.listFrame = rect
             pin.riseTop = riseTop
-            // Drawn upside down from its bottom edge, the list moves everything on it when that edge moves: what sits
-            // under it came or went (the queue strip taken as the next turn started moved the rows the user had open
-            // 60 pt down, #3005). The pin puts a held row back. Only that edge: its top edge moving moves nothing on
-            // it, and going by the list's height the pin moved a work line's header 40 pt by itself (`UnfoldTests`).
-            // Not for the keyboard: the newest stays above it, as it always has.
-            if old.height > 0, !KeyboardState.shared.isUp { pin.resized(by: rect.maxY - old.maxY) }
+            // Drawn upside down from its bottom edge, the list moves everything on it when that edge moves because
+            // the footer resized (queue bar appearing/draining, route banner, cards; #3005). Matching against
+            // `ChatFooter.body`'s height delta isolates footer resizes from keyboard/window height changes, working
+            // both when the keyboard is down and when it stays steadily up.
+            guard old.height > 0 else { return }
+            let edgeDelta = rect.maxY - old.maxY
+            guard abs(edgeDelta) >= 0.5 else { return }
+            if abs(scratch.pendingFooterDelta) >= 0.5, abs(scratch.pendingFooterDelta - edgeDelta) < 2 {
+                let applied = scratch.pendingFooterDelta
+                scratch.pendingFooterDelta = 0
+                scratch.pendingListEdgeDelta = 0
+                applyFooterResize(applied)
+            } else {
+                scratch.pendingListEdgeDelta = edgeDelta
+            }
         }
         .scrollDismissesKeyboard(.interactively)
         .simultaneousGesture(TapGesture().onEnded { menu.dismiss(); Keyboard.dismiss() })
@@ -3485,13 +3516,24 @@ struct ChatView: View {
         }
         .onChange(of: store.pending.count) { old, new in
             guard new > old else { return }
-            scratch.sentHere = Array((scratch.sentHere + store.pending.map { (id: $0.id, text: $0.text) }).suffix(20))
-            scratch.sentAt = .now
+            let queuedToStrip = store.pending.last?.queuedMode == true && (style == .dev || session?.assistant == true)
+            if !queuedToStrip || follow.follows {
+                scratch.sentHere = Array((scratch.sentHere + store.pending.map { (id: $0.id, text: $0.text) }).suffix(20))
+                scratch.sentAt = .now
+            }
+            // A queued message goes into the queue strip rather than appending a bubble to the transcript, so avoid
+            // pulling a reader out of history or undoing compact footer-resize offset compensation at the newest end.
+            guard !queuedToStrip else { return }
             setFollow { $0.follow() }
             scrollToEnd(animated: true)
         }
         // Parse what rows will show (Markdown, paths) in the background as messages load: scrolling then only lays out.
         .task(id: prewarmKey) { await prewarmRows() }
+    }
+
+    /// Compensates the flipped transcript's scroll offset for a footer-only height delta (`d = oldFooter - newFooter`).
+    private func applyFooterResize(_ d: CGFloat) {
+        pin.resized(by: d, maxNewestGap: follow.near ? Self.endRoom : nil)
     }
 
     #if DEBUG
@@ -5714,6 +5756,7 @@ struct Composer: View, Equatable {
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.key == b.key && a.status == b.status && a.placeholder == b.placeholder && (a.onCleared == nil) == (b.onCleared == nil)
             && a.covered == b.covered
+            && a.assistantChrome == b.assistantChrome
             && (a.pickMode == nil) == (b.pickMode == nil)
             && (a.openAssistantModel == nil) == (b.openAssistantModel == nil)
     }
@@ -5735,6 +5778,10 @@ struct Composer: View, Equatable {
     /// The link card covers the chat (ChatView's `link`): a picture handed in (a preview's screenshot, #150) lands without
     /// raising the keyboard, which would close the card.
     var covered = false
+    /// Unified Assistant conversation chrome (#16165): fuses queued messages and task routing into `ShellComposerBar`'s
+    /// top edge and arbitrates secondary advisory banners through `ComposerBannerCoordinator` while keeping all critical
+    /// prompts visible.
+    var assistantChrome = false
     /// Glow While Replying (Settings › Appearance, off by default): the assistant's composer glows while its reply is
     /// being written (`working`), not while it waits on the user (`blocked`) and not in an Agent's chat.
     @StoredValue(ComposerGlowPrefs.enabledKey) private var glowEnabled = false
@@ -6132,9 +6179,45 @@ struct Composer: View, Equatable {
     private var composerNotes: some View {
         let voice = model.voice
         let inCall = voice?.isLive(on: key) ?? false
+        let session = model.session(key)
+        let showsUltracodeLost = session.map { Ultracode.lostShown($0, features: model.features(key.group)) } == true
+        let showsModelFallback = session.flatMap { ModelFallbackText.card($0, headless: $0.assistant == true) } != nil
+        let showsVoiceEnded = voice != nil && !inCall && voice?.showsEnded(on: key) == true
+        let activeSuggestion = inCall ? nil : suggestion
+        let advisory: ComposerAdvisoryBanner? = assistantChrome ? ComposerBannerCoordinator.advisory(for: .init(
+            critical: .init(
+                stoppedAgent: session?.isStopped == true,
+                terminalOnly: session?.isTerminalOnly == true,
+                readOnlySource: session.map { !$0.canSend && $0.sourceSubtitle != nil } == true,
+                missingSession: session == nil && model.missingSessionReason(key) != nil,
+                liveRetry: model.liveRetry(key) != nil,
+                offlineAgent: offlineManager == nil && session.flatMap { model.offlineAgent($0) } != nil,
+                managerOffline: offlineManager != nil,
+                startingOrError: session.map { $0.starting == true || $0.startError != nil } == true,
+                attention: session.map { !($0.attentionReason ?? "").isEmpty && $0.state == .needsYou } == true,
+                failure: session.map { !($0.failureReason ?? "").isEmpty && !status.isActive && retried != $0.failureReason } == true,
+                readinessOrFailure: isMain
+                    ? (model.readiness.failure != nil || model.readiness.homeCardStep != nil
+                       || model.readiness.probeError != nil || model.readiness.probe != nil)
+                    : (session?.assistant == true && model.readiness.failure != nil),
+                pendingConfirmation: !model.interactions(for: key).isEmpty
+            ),
+            advisories: .init(
+                modelFallback: showsModelFallback,
+                ultracodeLost: showsUltracodeLost,
+                compaction: model.compactionNote(key) != nil,
+                pushHealth: isMain && PushHealthStore.shared.notice(group: key.group) != nil,
+                voiceEnded: showsVoiceEnded,
+                suggestion: activeSuggestion != nil
+            )
+        )) : nil
+        let allowAdvisory: (ComposerAdvisoryBanner) -> Bool = { banner in
+            !assistantChrome || advisory == banner
+        }
         return VStack(spacing: Theme.Space.s) {
+            // Critical prompts below are never gated or suppressed by advisory arbitration.
             SessionLiveRetryNote(key: key)
-            if offlineManager == nil, let session = model.session(key), let away = model.offlineAgent(session) {
+            if offlineManager == nil, let session, let away = model.offlineAgent(session) {
                 Text(verbatim: away.line)
                     .font(Theme.Font.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -6143,15 +6226,15 @@ struct Composer: View, Equatable {
             if let m = offlineManager {
                 ManagerOfflineNote(manager: m)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if let s = model.session(key), s.starting == true || s.startError != nil {
+            } else if let s = session, s.starting == true || s.startError != nil {
                 StartingNote(error: s.startError, agent: s.agentLabel, coded: s.startErrorCode?.isEmpty == false)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 SessionShellQuestion(session: s)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if let s = model.session(key), let reason = s.attentionReason, !reason.isEmpty, s.state == .needsYou {
+            } else if let s = session, let reason = s.attentionReason, !reason.isEmpty, s.state == .needsYou {
                 AttentionNote(reason: reason, link: s.externalLink, key: key)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if let s = model.session(key), let reason = s.failureReason, !reason.isEmpty, !status.isActive,
+            } else if let s = session, let reason = s.failureReason, !reason.isEmpty, !status.isActive,
                       retried != reason {
                 // Continue alone (not what is in the box); the note goes at once and stays gone for this notice, while the
                 // host takes the message and the list catches up.
@@ -6161,37 +6244,42 @@ struct Composer: View, Equatable {
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+            if isMain {
+                // The main conversation: what it still needs, or a refused send (docs/assistant/onboarding.md 4.4, 5.2).
+                ReadinessHomeCard(key: key, pickModel: openAssistantModel, route: $failureRoute)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if session?.assistant == true, let f = model.readiness.failure {
+                CodedFailureCard(failure: f, route: $failureRoute)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            // Secondary advisory banners share a single slot in Assistant conversations (`ComposerBannerCoordinator`).
             // A resume turned ultracode off (#1307): one line to turn it back on, or dismiss.
-            if let s = model.session(key), Ultracode.lostShown(s, features: model.features(key.group)) {
+            if allowAdvisory(.ultracodeLost), let s = session, showsUltracodeLost {
                 UltracodeLostNote(key: key, session: s)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             // After an upstream refusal the session runs on a fallback model (#4489): which, and the way back.
-            if let s = model.session(key), s.modelFallback != nil {
+            if allowAdvisory(.modelFallback), let s = session, s.modelFallback != nil {
                 ModelFallbackCard(key: key, session: s, working: status.isActive)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            if isMain {
+            if isMain, allowAdvisory(.pushHealth) {
                 PushHealthNotice(group: key.group)
-                // The main conversation: what it still needs, or a refused send (docs/assistant/onboarding.md 4.4, 5.2).
-                ReadinessHomeCard(key: key, pickModel: openAssistantModel, route: $failureRoute)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if model.session(key)?.assistant == true, let f = model.readiness.failure {
-                CodedFailureCard(failure: f, route: $failureRoute)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            CompactionSlot(key: key) // an assistant conversation's Compact context (#1762)
+            if allowAdvisory(.compaction) {
+                CompactionSlot(key: key) // an assistant conversation's Compact context (#1762)
+            }
             if canLoop, let hint = LoopCommand.hint(text) {
                 LoopDraftNote(hint: hint)
                     .transition(.opacity)
             }
-            if let suggestion, !inCall {
-                SuggestionPill(text: suggestion, risky: model.session(key)?.suggestionRisky == true) {
-                    text = suggestion
-                    selection = TextSelection(insertionPoint: suggestion.endIndex) // keep typing after it
+            if allowAdvisory(.suggestion), let activeSuggestion {
+                SuggestionPill(text: activeSuggestion, risky: session?.suggestionRisky == true) {
+                    text = activeSuggestion
+                    selection = TextSelection(insertionPoint: activeSuggestion.endIndex) // keep typing after it
                     focused = true
                 } send: {
-                    Task { await sendText(suggestion) }
+                    Task { await sendText(activeSuggestion) }
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -6221,7 +6309,7 @@ struct Composer: View, Equatable {
                 }
             }
             // A call that ended by itself: 「语音已结束 · 继续」 over the box, until the page goes (docs/assistant/voice.md 1.2 L).
-            if let voice, !inCall, voice.showsEnded(on: key) {
+            if allowAdvisory(.voiceEnded), let voice, showsVoiceEnded {
                 voice.endedLine(key: key)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -6234,7 +6322,7 @@ struct Composer: View, Equatable {
                                      : (suggestion ?? (shellChat ? String(localized: "Ask \(model.assistantShownName)") : placeholder ?? String(localized: "Message Claude"))),
                                  text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
                                  hasAttachments: hasAttachments,
-                                 stop: status.isActive && model.session(key)?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
+                                 stop: status.isActive && session?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
                                  voice: voiceEntry,
                                  voiceLabel: model.voice?.iconLabel(key),
                                  modesTitle: modesTitle,
@@ -6268,11 +6356,13 @@ struct Composer: View, Equatable {
                     if !shellChat || offersMainClear { quickCommands } // an agent's, as its composer offered them before the shell's; the main chat adds /clear (#5100)
                     #endif
                 } modes: {
-                    SessionModesMenu(key: key, session: model.session(key), picksModel: canPickModel, setsModes: setsModes,
+                    SessionModesMenu(key: key, session: session, picksModel: canPickModel, setsModes: setsModes,
                                      setsEffortOnly: setsEffortOnly, mainConversation: isMainAssistantChat,
                                      otherModel: canPickModel ? { typingModel = true } : nil,
                                      assistantPick: openAssistantModel,
                                      assistantModelName: assistantEffectiveName, pick: pickMode)
+                } top: {
+                    if assistantChrome { ComposerTopSlot(key: key) }
                 }
             } else if AppStyle.current.usesBeautifulUI {
                 // The BeautifulUI style's prompt bar; every other style keeps the original input line. Its direct
@@ -7101,14 +7191,7 @@ struct QueueStrip: View {
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
-            ScrollView {
-                rows
-            }
-            .scrollBounceBehavior(.basedOnSize)
-            // Its rows' own height until one is measured, not what it is offered: the footer is laid out first (#3703).
-            .fixedSize(horizontal: false, vertical: rowHeight == 0)
-            .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(drawnCount), Self.visibleRows) : nil)
-            .padding(.top, Theme.Space.sm)
+            EmptyView()
         } label: {
             Group {
                 if typeSize >= Theme.interfaceLargestTypeSize {
@@ -7138,6 +7221,33 @@ struct QueueStrip: View {
         .tint(.secondary)
         .padding(Theme.Space.m)
         .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
+        // Float the expanded queue list above the collapsed card so toggling or changing count never shifts the chat.
+        // Wrap in a concrete container so `.alignmentGuide(.top)` stays outside `_ConditionalContent`.
+        .overlay(alignment: .top) {
+            VStack(spacing: 0) {
+                if expanded {
+                    ScrollView {
+                        rows
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                    // Cap initial unmeasured height when more than `visibleRows` are queued to avoid a first-frame jump.
+                    .fixedSize(horizontal: false, vertical: rowHeight == 0 && drawnCount <= Int(Self.visibleRows))
+                    .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(drawnCount), Self.visibleRows) : nil)
+                    .frame(maxHeight: rowHeight == 0 ? Theme.Size.tapTarget * Self.visibleRows : nil)
+                    .padding(Theme.Space.m)
+                    .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
+                    .padding(.bottom, Theme.Space.s)
+                    .transition(.opacity)
+                }
+            }
+            .alignmentGuide(.top) { $0[.bottom] }
+        }
+        .onChange(of: total == 0) { _, empty in
+            if empty {
+                expanded = false
+                relayedExpanded = false
+            }
+        }
         .transition(.move(edge: .bottom).combined(with: .opacity))
         .accessibilityIdentifier("queue-strip")
     }
@@ -8566,6 +8676,11 @@ final class ChatScratch {
     /// the header keeps the header under the finger.
     var workHeadY: [String: CGFloat] = [:]
     var listFrame: CGRect = .zero
+    /// Footer-only height tracking to pair `ChatFooter.body` resizes with `chatScroll()` bottom-edge movement
+    /// without falsely triggering on keyboard or window height changes.
+    var footerHeight: CGFloat = 0
+    var pendingFooterDelta: CGFloat = 0
+    var pendingListEdgeDelta: CGFloat = 0
     /// The bottom on screen of the line being landed on (`ChatView.landing`).
     var landingMaxY: CGFloat?
     /// The list's horizontal offset at rest (-16: the side margins are content margins). Vertical jumps keep it:

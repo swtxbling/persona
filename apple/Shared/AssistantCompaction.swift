@@ -134,7 +134,7 @@ nonisolated struct MainClearState: Equatable, Sendable {
     /// True when the flag was dropped because a different main appeared.
     mutating func note(group: String, manager: String, mainSessionID: String?) -> Bool {
         guard let cleared, cleared.group == group, cleared.manager == manager else { return false }
-        if let mainSessionID, mainSessionID != cleared.sessionID {
+        if let mainSessionID, !mainSessionID.isEmpty, mainSessionID != cleared.sessionID {
             self.cleared = nil
             return true
         }
@@ -145,7 +145,7 @@ nonisolated struct MainClearState: Equatable, Sendable {
     /// True while the main id is still the one cleared (the request is on its way) and after the refresh leaves none.
     func showsPage(group: String, manager: String, currentEmpty: Bool, mainSessionID: String?) -> Bool {
         guard currentEmpty, let cleared, cleared.group == group, cleared.manager == manager else { return false }
-        if let mainSessionID, mainSessionID != cleared.sessionID { return false }
+        if let mainSessionID, !mainSessionID.isEmpty, mainSessionID != cleared.sessionID { return false }
         return true
     }
 }

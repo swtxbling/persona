@@ -463,9 +463,15 @@ nonisolated struct ActionTrayContent: Equatable, Sendable {
     /// The number its entry shows: its rows (shelved ones are not counted). Finished's is finished work, never open work.
     func count(_ tray: ActionTray) -> Int { rows(tray).count }
 
-    /// The entries the bar shows: Needs You and In Progress always, Finished while it lists something or `open` is it.
+    /// The entries the bar shows: Needs You (always visible) and In Progress always; Finished is not persistent on the
+    /// collapsed bar and appears on the bar only while its tray is open (reachable from any open tray's header).
     func entries(open: ActionTray?) -> [ActionTray] {
-        ActionTray.allCases.filter { $0 != .finished || !finished.isEmpty || open == .finished }
+        ActionTray.allCases.filter { $0 != .finished || open == .finished }
+    }
+
+    /// Whether the open tray header offers a one-tap link into the 24-hour Finished list.
+    func offersFinishedLink(for tray: ActionTray) -> Bool {
+        tray != .finished && !finished.isEmpty
     }
 
     /// Groups Needs You (`grouped`) when `enabled` (the main conversation folding background rounds); otherwise one list.
@@ -547,6 +553,9 @@ struct AssistantActionBar: View {
     /// is the one open: in the trays' place, so never with `open` (#8223).
     @State private var held: PushInterceptsModel?
     @State private var heldOpen = false
+    /// Whether the main conversation's Inbox wrap-up tray is open in the shared tray slot (mutually exclusive with
+    /// `open`, `heldOpen`, and `dock`).
+    @State private var wrapUpOpen = false
     private var store: TasksStore { .shared }
 
     private var entryRow: AnyLayout { AnyLayout(HStackLayout(spacing: Theme.Space.s)) }
@@ -556,63 +565,85 @@ struct AssistantActionBar: View {
         let content = Self.content(conversation, key: key)
         let row = entryRow
         let inMain = conversation == AppModel.shared.assistantMain?.sessionID && AppModel.shared.api != nil
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            if let open {
-                tray(open, content)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if heldOpen, let held {
-                PushInterceptsTray(model: held) { withAnimation(Theme.Motion.state) { heldOpen = false } }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-            // Wider than the bar (Finished beside the two, Held Pushes and the computer's pill, a large text size), the
-            // entries scroll sideways instead of running off its edge, as on the web and Android (#10922); while they fit
-            // nothing moves.
-            ScrollView(.horizontal, showsIndicators: false) {
-                row {
-                    if let dock {
-                        let ids = QuestionDock.cards(own: dockOwn, conversation: conversation).map(\.id)
-                        if !ids.isEmpty {
-                            QuestionDockEntry(count: ids.count, arrived: QuestionDockLogic.arrived(ids, seen: dock.seen),
-                                              open: dock.showing(ids)) {
-                                Haptics.tap()
-                                withAnimation(Theme.Motion.state) {
-                                    if dock.showing(ids) {
-                                        dock.fold(ids)
-                                    } else {
-                                        open = nil
-                                        heldOpen = false
-                                        dock.show()
-                                    }
+        // Wider than the bar (Wrap Up, Held Pushes, the computer's pill, or a large text size), the entries scroll
+        // sideways instead of running off its edge, as on the web and Android (#10922); while they fit nothing moves.
+        ScrollView(.horizontal, showsIndicators: false) {
+            row {
+                if let dock {
+                    let ids = QuestionDock.cards(own: dockOwn, conversation: conversation).map(\.id)
+                    if !ids.isEmpty {
+                        QuestionDockEntry(count: ids.count, arrived: QuestionDockLogic.arrived(ids, seen: dock.seen),
+                                          open: dock.showing(ids)) {
+                            Haptics.tap()
+                            withAnimation(Theme.Motion.state) {
+                                if dock.showing(ids) {
+                                    dock.fold(ids)
+                                } else {
+                                    open = nil
+                                    wrapUpOpen = false
+                                    heldOpen = false
+                                    dock.show()
                                 }
                             }
                         }
                     }
-                    ForEach(content.entries(open: open)) { entry($0, count: content.count($0)) }
-                    if inMain, let held {
-                        PushInterceptsEntry(model: held, open: heldOpen) {
-                            withAnimation(Theme.Motion.state) {
-                                open = nil
-                                heldOpen.toggle()
-                            }
+                }
+                ForEach(content.entries(open: open)) { entry($0, count: content.count($0)) }
+                if inMain {
+                    WrapUpEntry(conversation: conversation, open: wrapUpOpen) {
+                        withAnimation(Theme.Motion.state) {
+                            open = nil
+                            heldOpen = false
+                            wrapUpOpen.toggle()
                         }
                     }
-                    // A Mac the model operates (the screen-share module's pill), as the entries.
-                    ForEach(Modules.registry.views(at: .chatFooter).filter { $0.shows(.init(activity: computer)) }) {
-                        $0.view(.init(activity: computer)).background(Theme.pageBackground, in: .capsule)
+                }
+                if inMain, let held {
+                    PushInterceptsEntry(model: held, open: heldOpen) {
+                        withAnimation(Theme.Motion.state) {
+                            open = nil
+                            wrapUpOpen = false
+                            heldOpen.toggle()
+                        }
                     }
                 }
-                .padding(.horizontal, Theme.Space.xs)
+                // A Mac the model operates (the screen-share module's pill), as the entries.
+                ForEach(Modules.registry.views(at: .chatFooter).filter { $0.shows(.init(activity: computer)) }) {
+                    $0.view(.init(activity: computer)).background(Theme.pageBackground, in: .capsule)
+                }
             }
-            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-            .padding(.top, Theme.Space.s)
+            .padding(.horizontal, Theme.Space.xs)
         }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .padding(.top, Theme.Space.s)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Open trays float above the capsule row instead of growing the footer layout height, so opening,
+        // switching, expanding rows, or closing a tray never shifts the chat message list.
+        // The concrete container keeps `.alignmentGuide(.top)` outside `_ConditionalContent` so `.overlay` reads `$0[.bottom]`.
+        .overlay(alignment: .top) {
+            VStack(spacing: 0) {
+                if let open {
+                    tray(open, content)
+                        .padding(.bottom, Theme.Space.s)
+                        .transition(.opacity)
+                } else if wrapUpOpen, inMain {
+                    WrapUpTray(conversation: conversation) { withAnimation(Theme.Motion.state) { wrapUpOpen = false } }
+                        .padding(.bottom, Theme.Space.s)
+                        .transition(.opacity)
+                } else if heldOpen, let held {
+                    PushInterceptsTray(model: held) { withAnimation(Theme.Motion.state) { heldOpen = false } }
+                        .padding(.bottom, Theme.Space.s)
+                        .transition(.opacity)
+                }
+            }
+            .alignmentGuide(.top) { $0[.bottom] }
+        }
         // No fade of its own: the chat runs on behind the bar and fades out there (`FooterFog`, #3696).
-        .onChange(of: conversation) { open = nil; expanded = []; drawn = []; planChoices = [:] }
-        // One tray at a time: Needs You's or In Progress' opening closes the held pushes'.
-        .onChange(of: open) { if open == nil { expanded = []; drawn = []; planChoices = [:] } else { heldOpen = false } }
+        .onChange(of: conversation) { open = nil; wrapUpOpen = false; heldOpen = false; expanded = []; drawn = []; planChoices = [:] }
+        // One tray at a time: Needs You's, In Progress' or Finished's opening closes Wrap Up and Held Pushes.
+        .onChange(of: open) { if open == nil { expanded = []; drawn = []; planChoices = [:] } else { wrapUpOpen = false; heldOpen = false } }
         // The pager steps aside while a tray is open (#12831).
-        .onChange(of: open != nil || heldOpen, initial: true) { _, tray in dock?.trayOpen = tray }
+        .onChange(of: open != nil || wrapUpOpen || heldOpen, initial: true) { _, tray in dock?.trayOpen = tray }
         // The held pushes are read in the main conversation while its tab is in front, every 30 s, with ln mode off too,
         // so the entry comes when the mode is turned on; the bar reads none of the model's values itself.
         .tabActiveTask(id: inMain) {
@@ -621,7 +652,7 @@ struct AssistantActionBar: View {
             if held == nil { held = model }
             await model.run()
         }
-        .onChange(of: inMain) { _, inMain in if !inMain { held = nil; heldOpen = false } }
+        .onChange(of: inMain) { _, inMain in if !inMain { held = nil; heldOpen = false; wrapUpOpen = false } }
         #if DEBUG
         .onAppear {
             if let value = UserDefaults.standard.string(forKey: "showActionTray"), let tray = ActionTray(rawValue: value) {
@@ -717,6 +748,26 @@ struct AssistantActionBar: View {
             HStack(spacing: Theme.Space.s) {
                 Text(tray.title).font(Theme.Font.sectionHeader).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: Theme.Space.s)
+                if content.offersFinishedLink(for: tray) {
+                    Button {
+                        Haptics.tap()
+                        withAnimation(Theme.Motion.state) { open = .finished }
+                    } label: {
+                        HStack(spacing: Theme.Space.xs) {
+                            if content.finished.contains(where: \.fresh) {
+                                StatusDot(state: .unread, size: Theme.Size.dot)
+                            }
+                            Text(ActionTray.finished.title)
+                            if let text = CountBadge.text(content.count(.finished)) { Text(text).monospacedDigit() }
+                        }
+                        .dockCapsule()
+                        .fixedSize()
+                        .tapTargetHeight()
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("action-tray.finished-link")
+                }
                 // The board has everything; of what finished, the trays list only the last 24 hours' (Finished).
                 Button {
                     open = nil

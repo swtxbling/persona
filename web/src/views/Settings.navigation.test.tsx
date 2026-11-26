@@ -95,7 +95,7 @@ import { forgetModuleSwitches, MODULE_SWITCH_KEY } from "../core/module-switch";
 import { initI18n, t } from "../i18n";
 import { Settings } from "./Settings";
 import { loadPages } from "../lib/lazy-page";
-import { FROM_LIST, openedFromSub } from "./settings/nav";
+import { FROM_ADVANCED, FROM_LIST, openedFromSub } from "./settings/nav";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let host: HTMLDivElement;
@@ -261,10 +261,11 @@ describe("Settings category navigation", () => {
 
   it("opens knowledge selection as the current assistant's, with no manager in the address", async () => {
     await mount("/settings?tab=models&manager=remote");
-    await act(async () => category(t("settings-nav.tab_knowledge")).click());
+    await act(async () => category(t("settings-nav.tab_advanced")).click());
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-settings-row="advanced-entry-knowledge"]')!.click());
     expect(host.querySelector('[data-page="knowledge-selection"]')).not.toBeNull();
     expect(location.search).toBe("?tab=knowledge");
-    expect(category(t("settings-nav.tab_knowledge")).getAttribute("aria-current")).toBe("page");
+    expect(category(t("settings-nav.tab_advanced")).getAttribute("aria-current")).toBe("page");
   });
   it("places desktop navigation beside a separately focusable, named content region", async () => {
     await mount("/settings?tab=shortcuts");
@@ -283,7 +284,8 @@ describe("Settings category navigation", () => {
       expect(button.tabIndex).toBe(0);
     }
     expect(nav().querySelectorAll('[aria-current="page"]')).toHaveLength(1);
-    expect(category(t("settings-nav.tab_shortcuts")).getAttribute("aria-current")).toBe("page");
+    expect(category(t("settings-nav.tab_advanced")).getAttribute("aria-current")).toBe("page");
+    expect(host.querySelector('[data-settings-advanced-back]')).not.toBeNull();
   });
 
   it("changes the URL, current category and region together, and restores them on reload", async () => {
@@ -292,7 +294,7 @@ describe("Settings category navigation", () => {
     expect(location.search).toBe("?tab=notifications");
     expect(host.querySelector('[data-page="notifications"]')).not.toBeNull();
     expect(category(t("settings-nav.tab_notifications")).getAttribute("aria-current")).toBe("page");
-    expect(category(t("settings-nav.tab_shortcuts")).hasAttribute("aria-current")).toBe(false);
+    expect(category(t("settings-nav.tab_advanced")).hasAttribute("aria-current")).toBe(false);
     expect(host.querySelector('[role="region"]')?.getAttribute("aria-label")).toBe(t("settings-nav.tab_notifications"));
     await act(async () => root.render(null));
     await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
@@ -397,11 +399,11 @@ describe("Settings category navigation", () => {
     await mount("/settings");
     expect(host.querySelector('[role="region"]')).toBeNull();
     expect(host.querySelector("nav")?.classList.contains("w-56")).toBe(false);
-    await act(async () => category(t("settings-nav.tab_shortcuts")).click());
-    expect(location.search).toBe("?tab=shortcuts");
+    await act(async () => category(t("settings-nav.tab_notifications")).click());
+    expect(location.search).toBe("?tab=notifications");
     expect(history.state).toEqual({ [FROM_LIST]: true });
     expect(host.querySelector("nav")).toBeNull();
-    expect(host.querySelector("h1")?.textContent).toBe(t("settings-nav.tab_shortcuts"));
+    expect(host.querySelector("h1")?.textContent).toBe(t("settings-nav.tab_notifications"));
     const back = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings.back")}"]`)!;
     const historyBack = vi.spyOn(history, "back").mockImplementation(() => {});
     await act(async () => back.click());
@@ -412,6 +414,60 @@ describe("Settings category navigation", () => {
     });
     expect(host.querySelector("nav")).not.toBeNull();
     expect(host.querySelector("h1")?.textContent).toBe(t("settings.title"));
+  });
+
+  it("shows the 3-scope Advanced directory on desktop, highlights Advanced for sub-categories, and returns in one click (#13395)", async () => {
+    history.pushState(null, "", "/");
+    await mount("/settings?tab=advanced");
+    const dir = host.querySelector('[data-settings-advanced-directory]')!;
+    expect(dir).not.toBeNull();
+    expect([...dir.querySelectorAll<HTMLElement>('[data-settings-group^="advanced-"]')].map((el) => el.dataset.settingsGroup)).toEqual([
+      "advanced-assistant",
+      "advanced-device",
+      "advanced-hub",
+    ]);
+    await act(async () => dir.querySelector<HTMLButtonElement>('[data-settings-row="advanced-entry-shortcuts"]')!.click());
+    expect(location.search).toBe("?tab=shortcuts");
+    expect(host.querySelector('[data-page="shortcuts"]')).not.toBeNull();
+    expect(category(t("settings-nav.tab_advanced")).getAttribute("aria-current")).toBe("page");
+    const backBar = host.querySelector('[data-settings-advanced-back]')!;
+    expect(backBar.textContent).toContain(t("settings-nav.back_to_advanced"));
+    expect(backBar.textContent).toContain(t("settings-nav.tab_shortcuts"));
+    await popped(() => backBar.querySelector<HTMLButtonElement>("button")!.click());
+    expect(location.search).toBe("?tab=advanced");
+    expect(host.querySelector('[data-settings-advanced-directory]')).not.toBeNull();
+  });
+
+  it("drills into Advanced sub-categories on phone with Back to Advanced, then Settings, and returns to Settings when deep-linked (#13395)", async () => {
+    viewport.phone = true;
+    history.pushState(null, "", "/");
+    await mount("/settings");
+    await act(async () => category(t("settings-nav.tab_advanced")).click());
+    expect(location.search).toBe("?tab=advanced");
+    expect(history.state).toEqual({ [FROM_LIST]: true });
+
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-settings-row="advanced-entry-shortcuts"]')!.click());
+    expect(location.search).toBe("?tab=shortcuts");
+    expect(history.state).toEqual({ [FROM_ADVANCED]: true, [FROM_LIST]: 2 });
+    expect(host.querySelector('[data-settings-advanced-back]')).toBeNull();
+    const back = () => host.querySelector<HTMLButtonElement>("header button:first-child")!;
+    expect(back().getAttribute("aria-label")).toBe(t("settings.back_to", { name: t("settings-nav.tab_advanced") }));
+
+    await popped(() => back().click());
+    expect(location.search).toBe("?tab=advanced");
+    expect(back().getAttribute("aria-label")).toBe(t("settings.back"));
+
+    await popped(() => back().click());
+    expect(location.search).toBe("");
+    expect(host.querySelector("nav")).not.toBeNull();
+
+    // Direct deep link on phone skips Advanced and returns cleanly to the Settings list.
+    await act(async () => root.render(null));
+    await mount("/settings?tab=shortcuts");
+    expect(back().getAttribute("aria-label")).toBe(t("settings.back"));
+    await act(async () => back().click());
+    expect(location.pathname + location.search).toBe("/settings");
+    expect(host.querySelector("nav")).not.toBeNull();
   });
 
   it.each([false, true])("opens Sent from the Connectors bottom row and returns to Connectors (phone: %s)", async (phone) => {

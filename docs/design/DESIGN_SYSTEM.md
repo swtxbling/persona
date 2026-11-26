@@ -2129,6 +2129,26 @@ before common choices. It introduces no visual style, color palette, model defau
 core rows (#13395) are what an everyday user comes to Settings for; everything else is one tap further, under Advanced, and search
 still opens it directly (principle 2).
 
+#### Web settings registry (#13395)
+
+Web Settings mirrors the same single-registry model in `web/src/views/settings/registry.ts` (`SETTINGS_REGISTRY`,
+`CORE_SETTINGS_LIMIT = 10`, `coreNavGroups()`, `advancedNavGroups()`), keeping the four-group `NAV_GROUPS` catalog
+(`assistant`, `device`, `hub`, `labs`) intact:
+
+- **Settings home**: at most ten core rows across the three scopes — Models, Assistant profile, Channels, Connectors,
+  Inbox Sources and Extensions (six legacy rows, collapsing to three with `integrations_v2`: Models, Assistant profile,
+  Integrations & Extensions) for the current assistant; General (default Appearance, Language, Sidebar pages,
+  **Optional features**, This browser, About) and Notifications for This device; This hub for Hub — followed by one
+  untitled **Advanced** row and **Labs** on its own.
+- **Settings › Advanced** (`web/src/views/settings/AdvancedDirectory.tsx`): keeps the non-default Appearance extras
+  (#13398) at the top, then lists the seven remaining categories under the same three scopes — Saved Prompts, Knowledge
+  selection and Agents; Shortcuts; Assistants, Avatar and Devices. Viewing an Advanced category highlights **Advanced**
+  in the desktop sidebar and shows a one-click return bar; on phone widths, tapping an Advanced category pushes it over
+  Advanced so Back returns to Advanced (or to the Settings list when deep-linked directly).
+- **Guard and search**: `web/src/views/settings/registry.test.ts` enforces the ten-row cap, single home per category,
+  no home rows drawn outside `coreNavGroups()`, URL round-trips, direct search hits in `en`, `zh-Hans` and `ja`, and
+  that Optional features stays under General rather than Labs.
+
 ### 4.2 Gestures
 
 | Gesture | Behavior |

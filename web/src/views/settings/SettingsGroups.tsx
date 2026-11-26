@@ -8,7 +8,7 @@ import { managerOf, statusLine, useRoster } from "../../lib/managers";
 import { AssistantAvatar } from "../../ui/AssistantAvatar";
 import { cx } from "../../ui/atoms";
 import { AssistantSwitchButton } from "../AssistantSwitcher";
-import type { NavGroup } from "./nav";
+import type { SettingsNavGroup } from "./registry";
 
 const SETTINGS_ROUTE = { name: "settings" } as const;
 
@@ -25,11 +25,11 @@ export function useSettingsAssistant() {
 }
 
 /** A group's title: for the current assistant's, its avatar (with its status) and "<name>'s settings". */
-export function GroupTitle({ group, compact = false }: { group: NavGroup; compact?: boolean }) {
+export function GroupTitle({ group, compact = false }: { group: SettingsNavGroup; compact?: boolean }) {
   const me = useSettingsAssistant();
   if (group === "device") return <>{t("settings-nav.group_device")}</>;
   if (group === "hub") return <>{t("settings-nav.group_hub")}</>;
-  if (group === "labs") return null;
+  if (group === "labs" || group === "advanced") return null;
   return (
     <span className="flex min-w-0 items-center gap-1.5" data-settings-assistant={me.id ?? ""}>
       {me.id && <AssistantAvatar id={me.id} name={me.name} isDefault={me.isDefault} size={compact ? 16 : 18} status={me.tone} ring={compact ? "ring-(--color-inset)" : "ring-page"} />}
@@ -40,13 +40,13 @@ export function GroupTitle({ group, compact = false }: { group: NavGroup; compac
 
 /** The Switch beside the current assistant's group title; nothing for the other groups. It takes no more height than
  *  the title's line (its padding reaches out above and below), so a group title row aligned at the bottom centres both. */
-export function GroupAction({ group }: { group: NavGroup }) {
+export function GroupAction({ group }: { group: SettingsNavGroup }) {
   return group === "assistant" ? <span className="-my-0.5 flex shrink-0"><AssistantSwitchButton route={SETTINGS_ROUTE} /></span> : null;
 }
 
 /** The line under a group: whose settings the first one shows, and that the other two don't depend on it (said once,
  *  under the last). */
-export function GroupFooter({ group }: { group: NavGroup }) {
+export function GroupFooter({ group }: { group: SettingsNavGroup }) {
   const { name } = useSettingsAssistant();
   if (group === "assistant") return <>{t("settings-nav.assistant_footer", { name })}</>;
   if (group === "hub") return <>{t("settings-nav.hub_footer")}</>;
@@ -54,4 +54,4 @@ export function GroupFooter({ group }: { group: NavGroup }) {
 }
 
 /** Whether a group has a line under it. */
-export const hasFooter = (group: NavGroup) => group === "assistant" || group === "hub";
+export const hasFooter = (group: SettingsNavGroup) => group === "assistant" || group === "hub";

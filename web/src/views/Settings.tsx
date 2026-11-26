@@ -70,7 +70,9 @@ import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type La
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
 import { AgentOpenRow } from "./settings/AgentOpenSetting";
 import { SeenRowsRow } from "./settings/SeenRowsSetting";
-import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, isCoreTab, isModuleTab, itemIsPage, itemState, navGroups, openedFromSub, redirectLegacySettings, resolveSettingsTarget, settingsAt, settingsHref, SENT_SUB, stepsToList, tabInfo, TAB_INFO, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
+import { advancedChildState, AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, isCoreTab, isModuleTab, itemIsPage, itemState, openedFromAdvanced, openedFromSub, redirectLegacySettings, resolveSettingsTarget, settingsAt, settingsHref, SENT_SUB, stepsToList, tabInfo, TAB_INFO, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
+import { coreNavGroups, isAdvancedTab } from "./settings/registry";
+import { AdvancedBackBar, AdvancedDirectory } from "./settings/AdvancedDirectory";
 import { formatIntegrationsSub, isIntegrationDetailRoute, isLegacyIntegrationTab, normalizeIntegrationFilter, parseIntegrationsSub } from "./settings/integrations-route";
 import { moduleFeaturesSource } from "../core/module-features";
 import { useModuleStates } from "../core/module-host";
@@ -284,16 +286,25 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
       history.replaceState(null, "", location.href);
       return history.go(-2);
     }
+    if (k === "advanced" && isAdvancedTab(tab) && openedFromAdvanced(state)) {
+      setAt({ tab: k, sub: null, section: section ?? null });
+      if (!takeOverlayEntry()) return history.back();
+      history.replaceState(null, "", location.href);
+      return history.go(-2);
+    }
     setAt({ tab: k, sub: id, section: section ?? null });
     // the hub's page keeps its own choice of manager (the download mirrors); the current assistant's pages follow the pick
     let to = settingsHref(k, id, phone, k === "hub" ? configurationOwner.current : (resolved.manager ?? null), section);
     if (k === "integrations" && !id && resolved.filter && resolved.filter !== "all") {
       to += `${to.includes("?") ? "&" : "?"}filter=${encodeURIComponent(resolved.filter)}`;
     }
-    // from the phone's list the category goes on top of it, and an item's page on top of its category's page, so Back
-    // returns to each; another item of the category keeps the entry's way back, another category only the way to the list
+    // from the phone's list the category goes on top of it, and an item's page or Advanced sub-category on top of its
+    // parent, so Back returns to each; another item keeps the entry's way back, another category only the way to the list
     if (listed) history.pushState({ [FROM_LIST]: true }, "", BASE + to);
-    else if (k === tab && !sub && id && itemIsPage(k)) {
+    else if (tab === "advanced" && isAdvancedTab(k)) {
+      if (takeOverlayEntry()) history.replaceState(advancedChildState(state), "", BASE + to);
+      else history.pushState(advancedChildState(state), "", BASE + to);
+    } else if (k === tab && !sub && id && itemIsPage(k)) {
       if (takeOverlayEntry()) history.replaceState(itemState(state), "", BASE + to);
       else history.pushState(itemState(state), "", BASE + to);
     } else history.replaceState(k === tab && sub && id && openedFromSub(state) ? state : categoryState(state), "", BASE + to);
@@ -386,12 +397,17 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     integrationsKnown &&
     integrationsV2 &&
     isIntegrationDetailRoute(parseIntegrationsSub(sub));
+  const fromAdvanced = phone && isAdvancedTab(tab) && openedFromAdvanced(history.state);
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-line px-3 py-2 sm:px-4">
         {phone && at.tab ? (
           <>
-            <IconButton icon="chevronLeft" label={up ? up.label : t("settings.back")} onClick={up ? () => pick(tab, up.sub) : toList} />
+            <IconButton
+              icon="chevronLeft"
+              label={up ? up.label : fromAdvanced ? t("settings.back_to", { name: tabInfo("advanced").label }) : t("settings.back")}
+              onClick={up ? () => pick(tab, up.sub) : fromAdvanced ? () => pick("advanced") : toList}
+            />
             <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">{tabInfo(tab).label}</h1>
           </>
         ) : (
@@ -438,8 +454,14 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               }
               style={{ animation: `fade-up 320ms ${EASE} both` }}
             >
+              {!phone && isAdvancedTab(tab) && <AdvancedBackBar onBack={() => pick("advanced")} label={tabInfo(tab).label} />}
               {tab === "general" && <General onModel={() => pick("models", "translate", "model-config")} />}
-              {tab === "advanced" && <Advanced />}
+              {tab === "advanced" && (
+                <>
+                  <Advanced />
+                  <AdvancedDirectory shown={shown} integrationsV2={integrationsV2} onPick={pick} />
+                </>
+              )}
               {tab === "persona" && <AssistantProfile onTriageModel={() => pick("models", "agent.triage", "model-config")} />}
               {tab === "avatar" && (
                 <Group title={t("settings.avatar")} footer={t("settings.avatar_footer")} anchor="avatar">
@@ -658,7 +680,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
             {none && <p className="px-3 py-3 text-[12.5px] leading-relaxed text-ink-3">{t("settings.search_no_results")}</p>}
           </>
         ) : (
-          navGroups(integrationsV2).map((g) => {
+          coreNavGroups(integrationsV2).map((g) => {
             const its = g.tabs.filter(shown);
             if (!its.length) return null;
             return (
@@ -667,7 +689,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
                   <span className="min-w-0 flex-1"><GroupTitle group={g.key} compact /></span>
                   <GroupAction group={g.key} />
                 </div>
-                {its.map((k) => <NavRow key={k} k={k} selected={tab === k} notice={k === "labs" && labsUnseen} contentId={contentId} onPick={onPick} />)}
+                {its.map((k) => <NavRow key={k} k={k} selected={tab === k || (k === "advanced" && isAdvancedTab(tab))} notice={k === "labs" && labsUnseen} contentId={contentId} onPick={onPick} />)}
                 {hasFooter(g.key) && <p className="px-3 pt-1 pb-1.5 text-[11px] leading-snug text-ink-3"><GroupFooter group={g.key} /></p>}
               </div>
             );
@@ -720,7 +742,7 @@ function SettingsList({ shown, integrationsV2, onPick }: { shown: (k: Tab) => bo
   const labsUnseen = useHasUnseenLabs();
   return (
     <nav aria-label={t("settings.categories")}>
-      {navGroups(integrationsV2).map((g) => {
+      {coreNavGroups(integrationsV2).map((g) => {
         const tabs = g.tabs.filter(shown);
         if (!tabs.length) return null;
         return (

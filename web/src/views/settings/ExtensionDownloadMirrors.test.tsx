@@ -176,7 +176,7 @@ describe("independent extension download mirror settings", () => {
     const pick = (tab: Tab) => act(async () => {
       [...host.querySelectorAll<HTMLButtonElement>("nav button")].find((b) => b.textContent?.trim() === tabInfo(tab).label)!.click();
     });
-    await pick("devices");
+    await pick("advanced");
     await pick("hub");
     expect(location.search).toContain("manager=m-two");
     expect(host.querySelector("select")?.value).toBe("m-two");
@@ -206,7 +206,7 @@ describe("independent extension download mirror settings", () => {
       [...host.querySelectorAll<HTMLButtonElement>("nav button")].find((b) => b.textContent?.startsWith(tabInfo(tab).label))!.click();
     });
     await back();
-    await pick("devices");
+    await pick("advanced");
     await back();
     await pick("hub");
     expect(location.search).toContain("manager=m-two");

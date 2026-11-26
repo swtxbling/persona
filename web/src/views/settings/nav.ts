@@ -15,6 +15,7 @@ import {
   parseSettingsPath,
   type IntegrationFilter,
 } from "./integrations-route";
+import { coreNavGroups, type SettingsNavGroup } from "./registry";
 
 export { settingsHref } from "./href";
 
@@ -23,8 +24,9 @@ export type CoreTab = "general" | "persona" | "prompts" | "notifications" | "mod
 export type ModuleTab = string & { readonly moduleTab?: never };
 /** A category: one of the core's, or an enabled module's. */
 export type Tab = CoreTab | ModuleTab;
-/** The core's categories (core/module-host.ts CORE_SETTINGS_TABS names the same; nav.test.ts keeps them in step). */
-export const TABS: CoreTab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "integrations", "channels", "connectors", "sources", "extensions", "shortcuts", "advanced", "devices", "hub", "managers", "knowledge", "avatar", "labs"];
+/** The core's categories (core/module-host.ts CORE_SETTINGS_TABS names the same; nav.test.ts keeps them in step).
+ *  `advanced` sits after the specific categories so Settings search ranks a direct category match ahead of it. */
+export const TABS: CoreTab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "integrations", "channels", "connectors", "sources", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge", "avatar", "advanced", "labs"];
 export const AGENT_KINDS = ["claude", "codex", "agy", "omp", "grok"] as const;
 export type AgentTab = (typeof AGENT_KINDS)[number];
 export type SettingsSection = "providers" | "model-config" | "translation" | "seen-rows" | AgentTab;
@@ -100,18 +102,9 @@ export function tabInfo(k: Tab): { label: string; icon: IconName; hint: string }
   return m ? { label: m.label(), icon: m.icon, hint: m.hint() } : { label: k, icon: "gear", hint: "" };
 }
 
-/** NAV_GROUPS with the enabled modules' categories, each after its group's own.
- *  When `integrationsV2` is false (default), hides `integrations` so legacy tabs stay unchanged.
- *  When `integrationsV2` is true, collapses `channels`, `connectors`, `extensions`, and `sources` into `integrations`. */
-export function navGroups(integrationsV2 = false): { key: NavGroup; tabs: Tab[] }[] {
-  const extra = enabledSettingsTabs();
-  return NAV_GROUPS.map((g) => {
-    const coreTabs = g.tabs.filter((k) =>
-      integrationsV2 ? !isLegacyIntegrationTab(k) : k !== "integrations",
-    );
-    const modTabs = extra.filter((m) => m.group === g.key).map((m) => m.key);
-    return { key: g.key, tabs: modTabs.length ? [...coreTabs, ...modTabs] : coreTabs };
-  });
+/** Top-level Settings navigation groups from the unified registry (settings/registry.ts `coreNavGroups`). */
+export function navGroups(integrationsV2 = false): { key: SettingsNavGroup; tabs: Tab[] }[] {
+  return coreNavGroups(integrationsV2);
 }
 
 /** Resolves a Settings tab+sub target for the active `integrations_v2` mode. */
@@ -266,6 +259,8 @@ export const FROM_LIST = "personaSettingsList";
 /** The history state of an item's page (an extension, a channel, a connector) opened from its category's page: Back from
  *  it returns to that page. */
 export const FROM_SUB = "personaSettingsSub";
+/** The history state of an Advanced sub-category opened from Settings › Advanced: Back returns to Advanced. */
+export const FROM_ADVANCED = "personaSettingsAdvanced";
 
 const marker = (state: unknown, key: string): unknown => (state && typeof state === "object" ? (state as Record<string, unknown>)[key] : undefined);
 
@@ -275,6 +270,10 @@ export function openedFromList(state: unknown): boolean {
 
 export function openedFromSub(state: unknown): boolean {
   return Boolean(marker(state, FROM_SUB));
+}
+
+export function openedFromAdvanced(state: unknown): boolean {
+  return Boolean(marker(state, FROM_ADVANCED));
 }
 
 /** How many entries back the phone's list is from this one; 0: it is not under it. */
@@ -289,11 +288,18 @@ export function itemState(state: unknown): Record<string, unknown> {
   return n ? { [FROM_SUB]: true, [FROM_LIST]: n + 1 } : { [FROM_SUB]: true };
 }
 
+/** The state of an Advanced sub-category pushed over Settings › Advanced (`state`). */
+export function advancedChildState(state: unknown): Record<string, unknown> {
+  const n = stepsToList(state);
+  return n ? { [FROM_ADVANCED]: true, [FROM_LIST]: n + 1 } : { [FROM_ADVANCED]: true };
+}
+
 /** The state an entry keeps when another category replaces it: its way back to the list, not to the item's category. */
 export function categoryState(state: unknown): Record<string, unknown> | null {
   if (!openedFromList(state)) return null;
   const rest = { ...(state as Record<string, unknown>) };
   delete rest[FROM_SUB];
+  delete rest[FROM_ADVANCED];
   return rest;
 }
 

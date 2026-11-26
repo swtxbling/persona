@@ -94,13 +94,13 @@ describe("settings sidebar groups", () => {
     ]);
     expect(NAV_GROUPS.flatMap((g) => g.tabs).sort()).toEqual([...TABS].sort());
     expect([...ASSISTANT_TABS]).toEqual(NAV_GROUPS[0].tabs);
-    // When integrations_v2 is off (default), legacy tabs stay 100% identical and integrations is hidden.
+    // When integrations_v2 is off (default), top-level assistant core rows stay legacy and hide integrations (advanced rows live under Settings › Advanced).
     expect(navGroups(false)[0]!.tabs).toEqual([
-      "models", "persona", "prompts", "channels", "connectors", "sources", "extensions", "knowledge", "agents",
+      "models", "persona", "channels", "connectors", "sources", "extensions",
     ]);
     // When integrations_v2 is on, channels/connectors/sources/extensions collapse 4-in-1 into integrations.
     expect(navGroups(true)[0]!.tabs).toEqual([
-      "models", "persona", "prompts", "integrations", "knowledge", "agents",
+      "models", "persona", "integrations",
     ]);
   });
 

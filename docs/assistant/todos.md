@@ -978,6 +978,31 @@ independent reviews, multi-Agent ambiguity and existing scheduled wakes retain o
   the object's final path component and supply that URL as a `build` or `url` artifact.
   An unrelated artifact or a PR link alone is insufficient for a deployment object.
   Unbound "wait for a system message" stays idle.
+
+### Service restart auto-resume
+
+(`assistant/todo_restart_recovery.go`, `db/todo_recovery.go`.) When `restart_auto_resume` is enabled
+(exposed on `GET`/`PUT /api/v1/assistant`; default `false` on fresh installs, or inherited while
+`todos_v2` is enabled; explicit `true`/`false` always takes precedence and is reversible at any time),
+the manager persists an active checkpoint (`todo_recovery_state`) while an open supervised task's
+Agent is working and clears it once the turn finishes normally, enters `pending_review`, `parked`,
+`needs_user`, `accepted`, `cancelled`, or is explicitly stopped (`agent_interrupt` without `then`,
+or channel `/stop`).
+
+- **Hub and node restarts**: After a hub restart (boot epoch change) or a fast node service restart
+  (`StatusInterrupted` with `StopCause == restart`, checked promptly on `NodeConnected` and during
+  `superviseWatch`), interrupted open tasks resume automatically — using guarded `resumeAndSend`
+  for stopped/`StatusInterrupted` sessions (checking `StopCause == restart`, context-full compaction,
+  and machine reachability) and targeted `session.send` for live sessions.
+- **Anti-false-wakeup guards**: Auto-resume never wakes user/supervisor stops (`StopUser`, `StopExit`,
+  `StopTimeout`), hub idle-retired or failed stops (`StopIdle`, `StopUsageLimit`, `StopCompactFailed`,
+  `StopResumeFailed`), `pending_review`/concluded tasks, `done`/`cancelled`/`parked`/`needs_user`
+  tasks, sessions waiting on an interaction (`StateNeedsYou`, pending cards/asks), archived sessions,
+  or offline nodes.
+- **Crash-loop protection and idempotency**: Concurrent sweeps atomically claim each restart cycle
+  so a session resumes at most once per restart. Consecutive restart attempts (cap 2, automatically
+  resetting after a 1-hour quiet window) and a per-session 1-hour storm limit (cap 3) escalate via
+  `sigRecovered` instead of looping.
 - An explicit upstream merge/review wait can name one exact PR/MR in the last closeout's
   `waiting` field or artifacts. For example, a maintainer re-review wait need not repeat its
   `artifact: pr` URL in `waiting`. A link found only outside that closeout is not binding evidence;

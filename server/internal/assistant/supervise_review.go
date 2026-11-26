@@ -487,6 +487,11 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		body.By = reviewByBackground
 	}
 	_, _ = s.appendFeed(ctx, t.Origin, feedReview, t.ID, body)
+	if verdict == reviewParked || verdict == reviewNeedsUser || verdict == reviewAccepted || verdict == reviewCancelled {
+		if recErr := s.ClearTodoRecoveryCheckpoint(ctx, t.ID); recErr != nil {
+			s.logf("task %s: clear restart recovery checkpoint on %s: %v", t.ID, verdict, recErr)
+		}
+	}
 	if wasNeedsUser && !(verdict == reviewNeedsUser && priorReply != nil) {
 		// Supersede and clear any previous pending needs_user card across clients before posting any replacement card (#13112).
 		s.supersedeDecision(ctx, t.ID, supersededReason)

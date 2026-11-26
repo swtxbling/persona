@@ -17,7 +17,7 @@ import (
 )
 
 // maxRestartRecoveryAttempts caps consecutive automatic restart self-healing retries per supervised
-// task across restarts before escalating to supervision (#15733).
+// task within restartAutoResumeWindow before escalating to supervision (#15733).
 const maxRestartRecoveryAttempts = 2
 
 // Sliding-window storm guardrails per (machine, session) so rapid restart loops cannot burn tokens
@@ -26,6 +26,8 @@ var (
 	restartAutoResumeWindow      = time.Hour
 	maxRestartAutoResumesPerHour = 3
 )
+
+var errRecoveryMachineOffline = errors.New("its machine is offline")
 
 // runtimeBootEpoch returns this Service's stable per-process boot epoch, initializing it lazily
 // for zero-value Service{} instances in tests (#16099).
@@ -55,15 +57,17 @@ func (s *Service) setBootEpoch(epoch string) {
 	s.todosV2BootEpoch.Store(&v)
 }
 
-// startupRecoveryProgress tracks per-boot machine sweep progress, node-restart cycle idempotency,
-// and per-session hourly storm limits without adding fields to Service (#16227).
+// startupRecoveryProgress tracks per-boot machine sweep progress, atomic cycle claims across
+// concurrent NodeConnected / superviseWatch goroutines, and per-session hourly storm limits
+// without adding fields to Service (#16227).
 type startupRecoveryProgress struct {
 	mu            sync.Mutex
 	epoch         string
 	sweptMachines map[string]bool
 	inFlight      map[string]bool
 	lastSweptFlag bool
-	nodeCycleDone map[string]bool
+	cycleInFlight map[string]bool
+	cycleDone     map[string]bool
 	hourlyResumes map[[2]string][]time.Time
 	clock         func() time.Time
 }
@@ -120,19 +124,51 @@ func (p *startupRecoveryProgress) recordHourlyResume(key [2]string, now time.Tim
 	return len(kept)
 }
 
-func (p *startupRecoveryProgress) nodeCycleHandled(cycleKey string) bool {
+// tryClaimCycle atomically reserves all keys for exclusive handling across concurrent
+// NodeConnected and superviseWatch goroutines. Returns false if any key is already in-flight or done.
+func (p *startupRecoveryProgress) tryClaimCycle(keys ...string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.nodeCycleDone[cycleKey]
+	if p.cycleInFlight == nil {
+		p.cycleInFlight = make(map[string]bool)
+	}
+	if p.cycleDone == nil {
+		p.cycleDone = make(map[string]bool)
+	}
+	for _, k := range keys {
+		if k == "" {
+			continue
+		}
+		if p.cycleInFlight[k] || p.cycleDone[k] {
+			return false
+		}
+	}
+	for _, k := range keys {
+		if k == "" {
+			continue
+		}
+		p.cycleInFlight[k] = true
+	}
+	return true
 }
 
-func (p *startupRecoveryProgress) markNodeCycleHandled(cycleKey string) {
+// finishCycle releases in-flight reservations for keys and, when done is true, marks them completed
+// so neither NodeConnected nor superviseWatch re-processes the same restart cycle.
+func (p *startupRecoveryProgress) finishCycle(done bool, keys ...string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.nodeCycleDone == nil {
-		p.nodeCycleDone = make(map[string]bool)
+	if done && p.cycleDone == nil {
+		p.cycleDone = make(map[string]bool)
 	}
-	p.nodeCycleDone[cycleKey] = true
+	for _, k := range keys {
+		if k == "" {
+			continue
+		}
+		delete(p.cycleInFlight, k)
+		if done {
+			p.cycleDone[k] = true
+		}
+	}
 }
 
 // startupRecoveryProgressRegistry attaches per-Service startup sweep state without modifying
@@ -154,7 +190,8 @@ func (s *Service) startupRecoveryProgress() *startupRecoveryProgress {
 	prog := &startupRecoveryProgress{
 		sweptMachines: make(map[string]bool),
 		inFlight:      make(map[string]bool),
-		nodeCycleDone: make(map[string]bool),
+		cycleInFlight: make(map[string]bool),
+		cycleDone:     make(map[string]bool),
 		hourlyResumes: make(map[[2]string][]time.Time),
 	}
 	startupRecoveryProgressRegistry.bySvc[wp] = prog
@@ -183,9 +220,16 @@ func (s *Service) recoveryNow() time.Time {
 	return s.startupRecoveryProgress().now()
 }
 
-// isRecoveryMachineOffline reports whether machineID is explicitly known to be offline/unreachable
-// from the hub's device list. When no device list is available (e.g. direct unit tests), it returns
-// false and defers to s.sessions(ctx, machineID) reachability.
+func (s *Service) deviceReachableForRecovery(d Device) bool {
+	if s != nil && s.devs != nil {
+		return d.Reachable
+	}
+	return d.Reachable || d.Online
+}
+
+// isRecoveryMachineOffline reports whether machineID is known to be unreachable from the hub's
+// device list. When no device list is available (e.g. direct unit tests), it returns false and
+// defers to s.sessions(ctx, machineID) reachability.
 func (s *Service) isRecoveryMachineOffline(ctx context.Context, machineID string) bool {
 	if s == nil {
 		return false
@@ -198,10 +242,10 @@ func (s *Service) isRecoveryMachineOffline(ctx context.Context, machineID string
 	for _, d := range devices {
 		did := cmp.Or(s.canonical(d.ID), strings.TrimSpace(d.ID))
 		if did == want {
-			return !d.Online && !d.Reachable
+			return !s.deviceReachableForRecovery(d)
 		}
 	}
-	return false
+	return true
 }
 
 // maybeRunStartupRestartRecovery executes startup restart self-healing per connected machine
@@ -682,8 +726,8 @@ func (s *Service) ResetSupervisedTaskRecovery(ctx context.Context, todoID string
 }
 
 // ClearTodoRecoveryCheckpoint removes the persisted active checkpoint for todoID when a task
-// enters pending_review, parked, needs_user, or is explicitly stopped so a subsequent restart
-// cannot falsely wake it.
+// enters pending_review, parked, needs_user, accepted, cancelled, or is explicitly stopped so a
+// subsequent restart cannot falsely wake it.
 func (s *Service) ClearTodoRecoveryCheckpoint(ctx context.Context, todoID string) error {
 	if s == nil {
 		return nil
@@ -695,6 +739,39 @@ func (s *Service) ClearTodoRecoveryCheckpoint(ctx context.Context, todoID string
 	st := s.todoRecoveryStore()
 	if st == nil {
 		return nil
+	}
+	return st.DeleteTodoRecoveryState(ctx, todoID)
+}
+
+// ClearTodoRecoveryCheckpointIfEpoch removes the active checkpoint for todoID only when it belongs
+// to bootEpoch (i.e. the session finished its turn normally during the current hub run). Older
+// pre-restart checkpoints for still-offline machines are preserved until their machine reconnects,
+// and freshly auto-resumed checkpoints are kept until the resumed Agent has newer activity after
+// LastRecoveredAt so back-to-back crashes preserve attempt accounting.
+func (s *Service) ClearTodoRecoveryCheckpointIfEpoch(ctx context.Context, todoID, bootEpoch string, latestAgentUpdate time.Time) error {
+	if s == nil {
+		return nil
+	}
+	todoID = strings.TrimSpace(todoID)
+	bootEpoch = strings.TrimSpace(bootEpoch)
+	if todoID == "" || bootEpoch == "" {
+		return nil
+	}
+	st := s.todoRecoveryStore()
+	if st == nil {
+		return nil
+	}
+	rec, found, err := st.GetTodoRecoveryState(ctx, todoID)
+	if err != nil || !found {
+		return err
+	}
+	if rec.LastActiveBootEpoch != bootEpoch {
+		return nil
+	}
+	if rec.LastRecoveredAt != nil {
+		if latestAgentUpdate.IsZero() || !latestAgentUpdate.After(*rec.LastRecoveredAt) {
+			return nil
+		}
 	}
 	return st.DeleteTodoRecoveryState(ctx, todoID)
 }
@@ -855,7 +932,7 @@ func (s *Service) runRestartRecoverySweepInternal(
 			continue
 		}
 
-		// Guard 4: node must be online (never fire blanks against an offline node).
+		// Guard 4: node must be reachable (never fire blanks against an offline node).
 		if s.isRecoveryMachineOffline(ctx, rec.MachineID) {
 			s.logf("restart_auto_resume action=skipped todo=%s machine=%s session=%s cycle=%s reason=machine_offline",
 				rec.TodoID, rec.MachineID, rec.SessionID, currentBootEpoch)
@@ -870,6 +947,11 @@ func (s *Service) runRestartRecoverySweepInternal(
 				result.SkippedTodoIDs = append(result.SkippedTodoIDs, rec.TodoID)
 				continue
 			}
+			hubClaimKey := fmt.Sprintf("hub:%s@%s", rec.TodoID, currentBootEpoch)
+			if !prog.tryClaimCycle(hubClaimKey) {
+				result.SkippedTodoIDs = append(result.SkippedTodoIDs, rec.TodoID)
+				continue
+			}
 			if err := st.RecordTodoActiveCheckpoint(ctx, db.TodoRecoveryState{
 				TodoID:              rec.TodoID,
 				MachineID:           rec.MachineID,
@@ -879,6 +961,7 @@ func (s *Service) runRestartRecoverySweepInternal(
 				LastRecoveredAt:     rec.LastRecoveredAt,
 				UpdatedAt:           now,
 			}); err != nil {
+				prog.finishCycle(false, hubClaimKey)
 				return result, err
 			}
 			s.signal(superviseSignal{
@@ -893,6 +976,7 @@ func (s *Service) runRestartRecoverySweepInternal(
 					rec.MachineID, rec.SessionID, rec.LastActiveBootEpoch, currentBootEpoch,
 				),
 			})
+			prog.finishCycle(true, hubClaimKey)
 			s.logf("restart_auto_resume action=escalated_missing todo=%s machine=%s session=%s cycle=%s",
 				rec.TodoID, rec.MachineID, rec.SessionID, currentBootEpoch)
 			result.EscalatedTodoIDs = append(result.EscalatedTodoIDs, rec.TodoID)
@@ -918,7 +1002,8 @@ func (s *Service) runRestartRecoverySweepInternal(
 			continue
 		}
 
-		// Guard 8: precise restart-interrupted classification (never wake user stops, working sessions, or concluded tasks).
+		// Guard 8: precise restart-interrupted classification (never wake user stops, idle-retired
+		// sessions, non-restart stop causes, working sessions, or concluded tasks).
 		interrupted, skipReason := isRestartInterruptedSession(t, sess, hubRestart)
 		if !interrupted {
 			if hubRestart {
@@ -932,16 +1017,34 @@ func (s *Service) runRestartRecoverySweepInternal(
 		cycleID := currentBootEpoch
 		trigger := "hub_restart"
 		nodeCycleID := nodeRestartCycleKey(rec.MachineID, rec.SessionID, currentBootEpoch, sess)
-		if !hubRestart {
+		claimKeys := []string{nodeCycleID}
+		if hubRestart {
+			claimKeys = append(claimKeys, fmt.Sprintf("hub:%s@%s", rec.TodoID, currentBootEpoch))
+		} else {
 			cycleID = nodeCycleID
 			trigger = "node_restart"
-			if prog.nodeCycleHandled(cycleID) {
-				result.SkippedTodoIDs = append(result.SkippedTodoIDs, rec.TodoID)
-				continue
-			}
+		}
+		// Atomic test-and-set claim prevents concurrent NodeConnected and superviseWatch goroutines
+		// from ever double-resuming the same restart cycle.
+		if !prog.tryClaimCycle(claimKeys...) {
+			result.SkippedTodoIDs = append(result.SkippedTodoIDs, rec.TodoID)
+			continue
 		}
 
-		// Guard 9: crash-loop & storm caps (consecutive restart attempts + per-session hourly window).
+		// Quiet-window cooldown: if at least restartAutoResumeWindow has elapsed since the previous
+		// recovery attempt (e.g. genuine deploys days apart), reset the persisted attempt counter
+		// before checking caps so unrelated restarts do not escalate forever.
+		if rec.RecoveryAttempts > 0 && rec.LastRecoveredAt != nil && now.Sub(*rec.LastRecoveredAt) >= restartAutoResumeWindow {
+			if err := st.ResetTodoRecoveryState(ctx, rec.TodoID, now); err != nil {
+				prog.finishCycle(false, claimKeys...)
+				return result, err
+			}
+			rec.RecoveryAttempts = 0
+			rec.LastRecoveredAt = nil
+		}
+
+		// Guard 9: crash-loop & storm caps (DB-persisted consecutive attempts within window +
+		// per-session sliding 1-hour storm cap).
 		sessKey := [2]string{rec.MachineID, rec.SessionID}
 		hourlyCount := prog.hourlyCount(sessKey, now)
 		if rec.RecoveryAttempts >= maxRestartRecoveryAttempts || hourlyCount >= maxRestartAutoResumesPerHour {
@@ -969,10 +1072,11 @@ func (s *Service) runRestartRecoverySweepInternal(
 					LastRecoveredAt:     rec.LastRecoveredAt,
 					UpdatedAt:           now,
 				}); err != nil {
+					prog.finishCycle(false, claimKeys...)
 					return result, err
 				}
 			}
-			prog.markNodeCycleHandled(nodeCycleID)
+			prog.finishCycle(true, claimKeys...)
 			s.signal(superviseSignal{
 				Todo:    t.ID,
 				Kind:    sigRecovered,
@@ -992,15 +1096,49 @@ func (s *Service) runRestartRecoverySweepInternal(
 		// Under cap -> resume the exact checkpointed session and persist attempt increment.
 		prompt := formatRestartRecoveryPrompt(rec.RecoveryAttempts+1, maxRestartRecoveryAttempts)
 		if err := s.resumeRestartInterruptedAgent(ctx, t, sess, prompt); err != nil {
+			if errors.Is(err, errRecoveryMachineOffline) {
+				// Transient offline race: release claim so reconnect retries cleanly without consuming an attempt.
+				prog.finishCycle(false, claimKeys...)
+				s.logf("restart_auto_resume action=skipped todo=%s machine=%s session=%s cycle=%s trigger=%s reason=machine_offline",
+					rec.TodoID, rec.MachineID, rec.SessionID, cycleID, trigger)
+				result.SkippedTodoIDs = append(result.SkippedTodoIDs, rec.TodoID)
+				continue
+			}
+			// Non-offline failure: mark cycle handled and escalate once so we never spam retries every tick.
+			if hubRestart {
+				_ = st.RecordTodoActiveCheckpoint(ctx, db.TodoRecoveryState{
+					TodoID:              rec.TodoID,
+					MachineID:           rec.MachineID,
+					SessionID:           rec.SessionID,
+					LastActiveBootEpoch: currentBootEpoch,
+					RecoveryAttempts:    rec.RecoveryAttempts,
+					LastRecoveredAt:     rec.LastRecoveredAt,
+					UpdatedAt:           now,
+				})
+			}
+			prog.finishCycle(true, claimKeys...)
+			s.signal(superviseSignal{
+				Todo:    t.ID,
+				Kind:    sigRecovered,
+				Key:     fmt.Sprintf("restart_recovery_failed:%s@%s", t.ID, cycleID),
+				At:      now,
+				Machine: rec.MachineID,
+				Session: rec.SessionID,
+				Detail: fmt.Sprintf(
+					"Automatic restart recovery failed for session %s/%s (cycle %s): %v; supervisor review required.",
+					rec.MachineID, rec.SessionID, cycleID, err,
+				),
+			})
 			s.logf("restart_auto_resume action=resume_failed todo=%s machine=%s session=%s cycle=%s trigger=%s err=%v",
 				rec.TodoID, rec.MachineID, rec.SessionID, cycleID, trigger, err)
-			result.SkippedTodoIDs = append(result.SkippedTodoIDs, rec.TodoID)
+			result.EscalatedTodoIDs = append(result.EscalatedTodoIDs, rec.TodoID)
 			continue
 		}
 		if _, err := st.IncrementTodoRecoveryAttempts(ctx, rec.TodoID, currentBootEpoch, now); err != nil {
+			prog.finishCycle(true, claimKeys...)
 			return result, err
 		}
-		prog.markNodeCycleHandled(nodeCycleID)
+		prog.finishCycle(true, claimKeys...)
 		newHourly := prog.recordHourlyResume(sessKey, now)
 		s.logf("restart_auto_resume action=resumed todo=%s machine=%s session=%s cycle=%s trigger=%s attempts=%d/%d hourly=%d/%d",
 			rec.TodoID, rec.MachineID, rec.SessionID, cycleID, trigger,
@@ -1011,22 +1149,24 @@ func (s *Service) runRestartRecoverySweepInternal(
 }
 
 // resumeRestartInterruptedAgent wakes the exact checkpointed session sess:
-//   - stopped/StatusInterrupted sessions use the guarded resumeAndSend path (preserving launcher,
-//     cwd, model, permission mode, and compaction when needed);
-//   - live idle/done sessions receive a direct targeted session.send with completion guards.
+//   - stopped/StatusInterrupted sessions enforce resumeAllowed parity (explicit StopRestart cause,
+//     context compaction eligibility, and reachable device) and use guarded resumeAndSend;
+//   - live idle/done sessions verify no non-restart stop cause and send directly with completion guards.
 func (s *Service) resumeRestartInterruptedAgent(ctx context.Context, t Todo, sess proto.Session, prompt string) error {
+	if sess.Capabilities != nil && sess.Capabilities.StopCause != "" && sess.Capabilities.StopCause != proto.StopRestart {
+		return fmt.Errorf("refusing to auto-resume session with stop cause %s", sess.Capabilities.StopCause)
+	}
+	if contextFull(sess) && !compactable(sess) {
+		return fmt.Errorf("session context is nearly full (%d of %d tokens) and cannot be compacted automatically",
+			sess.ContextTokens, sess.ContextWindow)
+	}
 	if stoppedAgent(sess) {
-		if sess.Capabilities != nil && sess.Capabilities.StopCause.UserStopped() {
-			return errors.New("refusing to auto-resume user-stopped session")
+		if sess.Capabilities == nil || sess.Capabilities.StopCause != proto.StopRestart {
+			return errors.New("refusing to auto-resume stopped session without StopRestart provenance")
 		}
 		am, ok := s.device(ctx, sess.MachineID)
-		if !ok {
-			if len(s.devices(ctx)) > 0 {
-				return errors.New("its machine is offline")
-			}
-			am = Device{ID: sess.MachineID, Name: sess.MachineID, Online: true, Reachable: true}
-		} else if !am.Online && !am.Reachable {
-			return errors.New("its machine is offline")
+		if !ok || !s.deviceReachableForRecovery(am) {
+			return errRecoveryMachineOffline
 		}
 		_, err := s.resumeAndSend(ctx, t.Origin, am, sess, map[string]any{"text": prompt},
 			"automatic resume after service restart", prompt, "", nil)
@@ -1074,10 +1214,11 @@ func (s *Service) isSessionArchived(machineID, sessionID string, sess proto.Sess
 }
 
 func nodeRestartCycleKey(machineID, sessionID, bootEpoch string, sess proto.Session) string {
+	marker := "zero"
 	if !sess.UpdatedAt.IsZero() {
-		return fmt.Sprintf("node:%s/%s@%s", machineID, sessionID, sess.UpdatedAt.UTC().Format(time.RFC3339Nano))
+		marker = sess.UpdatedAt.UTC().Format(time.RFC3339Nano)
 	}
-	return fmt.Sprintf("node:%s/%s@boot:%s", machineID, sessionID, bootEpoch)
+	return fmt.Sprintf("node:%s:%s/%s@%s", bootEpoch, machineID, sessionID, marker)
 }
 
 func isSupervisedRecoverableTodo(t Todo) bool {
@@ -1148,12 +1289,18 @@ func isRestartConcludedTodo(t Todo) bool {
 }
 
 func isRestartInterruptedSession(t Todo, sess proto.Session, hubRestart bool) (bool, string) {
-	if sess.Capabilities != nil {
-		if sess.Capabilities.StopCause.UserStopped() {
-			return false, "user_stopped"
-		}
-		if sess.Capabilities.StopCause == proto.StopTimeout {
-			return false, "timeout_stopped"
+	// Strict StopCause whitelist: only explicit StopRestart is eligible among recorded stop causes.
+	// Rejects StopUser, StopExit, StopTimeout, StopIdle, StopTaskCompleted, StopUsageLimit,
+	// StopCompactFailed, StopResumeFailed, and StopTransientError.
+	if sess.Capabilities != nil && sess.Capabilities.StopCause != "" && sess.Capabilities.StopCause != proto.StopRestart {
+		return false, "stop_cause_" + string(sess.Capabilities.StopCause)
+	}
+	if contextFull(sess) && !compactable(sess) {
+		return false, "context_full_not_compactable"
+	}
+	if stoppedAgent(sess) {
+		if sess.Capabilities == nil || sess.Capabilities.StopCause != proto.StopRestart {
+			return false, "stopped_without_restart_cause"
 		}
 	}
 	if sess.TurnError != "" && (sess.TurnErrorKind == proto.TurnErrorAuthFailed || sess.TurnErrorKind == proto.TurnErrorNotLoggedIn) {

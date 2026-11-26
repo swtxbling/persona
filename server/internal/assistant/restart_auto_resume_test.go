@@ -3,8 +3,10 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,7 +26,7 @@ func setRestartAutoResumeSetting(t *testing.T, s *Service, want bool) {
 	}
 }
 
-func TestRestartAutoResumeEnabledByDefaultWithoutTodosV2(t *testing.T) {
+func TestRestartAutoResumeStandaloneWithoutTodosV2AndDefaultOff(t *testing.T) {
 	s, f := newQuietServiceOn(t, nil)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 	ctx := context.Background()
@@ -32,8 +34,14 @@ func TestRestartAutoResumeEnabledByDefaultWithoutTodosV2(t *testing.T) {
 	if s.settings(ctx).todosV2On() {
 		t.Fatal("expected todos_v2 default to be false")
 	}
-	if !s.settings(ctx).restartAutoResumeOn() {
-		t.Fatal("expected restart_auto_resume default to be true")
+	if s.settings(ctx).restartAutoResumeOn() {
+		t.Fatal("expected restart_auto_resume default to be false on fresh install")
+	}
+
+	// Enable restart_auto_resume standalone (todos_v2 stays false).
+	setRestartAutoResumeSetting(t, s, true)
+	if !s.settings(ctx).restartAutoResumeOn() || s.settings(ctx).todosV2On() {
+		t.Fatalf("expected standalone restart_auto_resume=true with todos_v2=false")
 	}
 
 	resumingNode(f)
@@ -93,6 +101,7 @@ func TestRestartAutoResumeNodeOnlyRestartAndIdempotency(t *testing.T) {
 	s, f := newQuietServiceOn(t, nil)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 	ctx := context.Background()
+	setRestartAutoResumeSetting(t, s, true)
 
 	resumingNode(f)
 	f.mu.Lock()
@@ -145,6 +154,7 @@ func TestRestartAutoResumeSixNegativeGuardsNeverFalseWake(t *testing.T) {
 	s, f := newQuietServiceOn(t, nil)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 	ctx := context.Background()
+	setRestartAutoResumeSetting(t, s, true)
 
 	resumingNode(f)
 	f.mu.Lock()
@@ -294,6 +304,7 @@ func TestRestartAutoResumeHourlyStormCapAndWindowReset(t *testing.T) {
 	s, f := newQuietServiceOn(t, nil)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 	ctx := context.Background()
+	setRestartAutoResumeSetting(t, s, true)
 
 	origWindow := restartAutoResumeWindow
 	origMaxPerHour := maxRestartAutoResumesPerHour
@@ -360,9 +371,11 @@ func TestRestartAutoResumeKillSwitchDisablesRecovery(t *testing.T) {
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 	ctx := context.Background()
 
+	// Even when todos_v2 is enabled, an explicit restart_auto_resume=false overrides and disables recovery.
+	setRestartRecoveryTodosV2(t, s, true, false)
 	setRestartAutoResumeSetting(t, s, false)
 	if s.settings(ctx).restartAutoResumeOn() {
-		t.Fatal("expected restart_auto_resume=false after PUT")
+		t.Fatal("expected explicit restart_auto_resume=false to override todos_v2=true")
 	}
 
 	task := setupSupervisedRecoveryTask(t, s, f, "Disabled switch task", "s-disabled", "assistant", []string{"Done."})
@@ -390,5 +403,260 @@ func TestRestartAutoResumeKillSwitchDisablesRecovery(t *testing.T) {
 	}
 	if len(res.RecoveredTodoIDs) != 0 || len(res.EscalatedTodoIDs) != 0 || len(sentToAgent(f)) != 0 {
 		t.Fatalf("restart_auto_resume=false must bypass sweep: res=%+v sent=%+v", res, sentToAgent(f))
+	}
+}
+
+func TestRestartAutoResumeNormalTurnEndClearsCheckpointBeforeRestart(t *testing.T) {
+	s, f := newQuietServiceOn(t, nil)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	ctx := context.Background()
+	setRestartAutoResumeSetting(t, s, true)
+
+	f.mu.Lock()
+	f.devices = []Device{{ID: "mac", Name: "Mac", Online: true, Reachable: true}}
+	f.mu.Unlock()
+
+	task := setupSupervisedRecoveryTaskOnMachine(t, s, f, "mac", "Normal turn end task", "s-normal-end", "assistant", []string{"Done."}, false)
+	s.setBootEpoch("boot-1")
+
+	// Tick 1: Agent is working -> checkpoint persisted under boot-1.
+	f.mu.Lock()
+	f.sessions["mac"] = []proto.Session{{
+		MachineID: "mac",
+		SessionID: "s-normal-end",
+		Status:    proto.StatusWorking,
+		State:     proto.StateWorking,
+		UpdatedAt: time.Now().UTC(),
+	}}
+	f.mu.Unlock()
+	s.superviseWatch(ctx, time.Now().UTC())
+	if _, found, err := s.todoRecoveryStore().GetTodoRecoveryState(ctx, task.ID); err != nil || !found {
+		t.Fatalf("expected active checkpoint while working: found=%t err=%v", found, err)
+	}
+
+	// Tick 2: Agent ends its turn normally (Idle) before any restart -> checkpoint cleared.
+	f.mu.Lock()
+	f.sessions["mac"] = []proto.Session{{
+		MachineID: "mac",
+		SessionID: "s-normal-end",
+		Status:    proto.StatusIdle,
+		UpdatedAt: time.Now().UTC(),
+	}}
+	f.mu.Unlock()
+	s.superviseWatch(ctx, time.Now().UTC())
+	if _, found, err := s.todoRecoveryStore().GetTodoRecoveryState(ctx, task.ID); err != nil || found {
+		t.Fatalf("normal turn end must clear same-epoch checkpoint: found=%t err=%v", found, err)
+	}
+
+	// Subsequent hub restart (boot-2) must NEVER falsely wake this task.
+	s.setBootEpoch("boot-2")
+	s.todosV2RecoverySwept.Store(false)
+	s.superviseWatch(ctx, time.Now().UTC())
+	if len(sentToAgent(f)) != 0 || len(startCalls(f)) != 0 {
+		t.Fatalf("hub restart must not wake task that ended normally before restart: sent=%+v starts=%+v", sentToAgent(f), startCalls(f))
+	}
+}
+
+func TestRestartAutoResumeRejectsNonRestartStopCausesAndUncompactableFullContext(t *testing.T) {
+	s, f := newQuietServiceOn(t, nil)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	ctx := context.Background()
+	setRestartAutoResumeSetting(t, s, true)
+
+	resumingNode(f)
+	f.mu.Lock()
+	f.devices = []Device{{ID: "mac", Name: "Mac", Online: true, Reachable: true}}
+	f.mu.Unlock()
+
+	cases := []struct {
+		name string
+		sess proto.Session
+	}{
+		{
+			name: "stop_idle",
+			sess: proto.Session{MachineID: "mac", SessionID: "s-stop-idle", Status: proto.StatusOffline, Capabilities: &proto.SessionCapabilities{Read: true, Terminal: true, StopCause: proto.StopIdle}},
+		},
+		{
+			name: "stop_usage_limit",
+			sess: proto.Session{MachineID: "mac", SessionID: "s-stop-usage", Status: proto.StatusInterrupted, Capabilities: &proto.SessionCapabilities{Read: true, Terminal: true, StopCause: proto.StopUsageLimit}},
+		},
+		{
+			name: "stop_compact_failed",
+			sess: proto.Session{MachineID: "mac", SessionID: "s-stop-compact", Status: proto.StatusInterrupted, Capabilities: &proto.SessionCapabilities{Read: true, Terminal: true, StopCause: proto.StopCompactFailed}},
+		},
+		{
+			name: "stop_resume_failed",
+			sess: proto.Session{MachineID: "mac", SessionID: "s-stop-resume", Status: proto.StatusInterrupted, Capabilities: &proto.SessionCapabilities{Read: true, Terminal: true, StopCause: proto.StopResumeFailed}},
+		},
+		{
+			name: "stop_unknown_stopped",
+			sess: proto.Session{MachineID: "mac", SessionID: "s-stop-unknown", Status: proto.StatusInterrupted, Capabilities: &proto.SessionCapabilities{Read: true, Terminal: true, StopCause: proto.StopUnknown}},
+		},
+		{
+			name: "nil_capabilities_stopped",
+			sess: proto.Session{MachineID: "mac", SessionID: "s-nil-caps", Status: proto.StatusInterrupted},
+		},
+		{
+			name: "context_full_uncompactable",
+			sess: proto.Session{
+				MachineID:     "mac",
+				SessionID:     "s-full-uncompactable",
+				Agent:         "claude",
+				SourceKind:    proto.SourceClaudeBg,
+				Status:        proto.StatusInterrupted,
+				ContextTokens: 195000,
+				ContextWindow: 200000,
+				Capabilities:  &proto.SessionCapabilities{Read: true, Terminal: true, StopCause: proto.StopRestart},
+			},
+		},
+	}
+
+	var sessions []proto.Session
+	for _, tc := range cases {
+		task := setupSupervisedRecoveryTaskOnMachine(t, s, f, "mac", tc.name, tc.sess.SessionID, "assistant", []string{"Done."}, false)
+		if err := s.todoRecoveryStore().RecordTodoActiveCheckpoint(ctx, db.TodoRecoveryState{
+			TodoID:              task.ID,
+			MachineID:           "mac",
+			SessionID:           tc.sess.SessionID,
+			LastActiveBootEpoch: "boot-1",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		sessions = append(sessions, tc.sess)
+	}
+
+	res, err := s.RunRestartRecoverySweep(ctx, "boot-2", sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.RecoveredTodoIDs) != 0 || len(res.EscalatedTodoIDs) != 0 || len(sentToAgent(f)) != 0 || len(startCalls(f)) != 0 {
+		t.Fatalf("none of non-restart stop causes / uncompactable full contexts may be resumed: res=%+v sent=%+v starts=%+v", res, sentToAgent(f), startCalls(f))
+	}
+}
+
+func TestRestartAutoResumeConcurrentNodeConnectedAndWatchSingleResume(t *testing.T) {
+	s, f := newQuietServiceOn(t, nil)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	ctx := context.Background()
+	setRestartAutoResumeSetting(t, s, true)
+
+	entered := make(chan struct{}, 8)
+	release := make(chan struct{})
+	f.answerNode(DeviceSessionStart, func(_ string, params json.RawMessage) (any, error) {
+		var p map[string]any
+		_ = json.Unmarshal(params, &p)
+		id, _ := p["resume_session_id"].(string)
+		entered <- struct{}{}
+		<-release
+		return map[string]any{"session": proto.Session{SessionID: id, Agent: "claude", Status: proto.StatusIdle}}, nil
+	})
+	f.mu.Lock()
+	f.devices = []Device{{ID: "mac", Name: "Mac", Online: true, Reachable: true}}
+	f.mu.Unlock()
+
+	task := setupSupervisedRecoveryTaskOnMachine(t, s, f, "mac", "Concurrent node restart", "s-conc-1", "assistant", []string{"Done."}, false)
+	s.setBootEpoch("boot-conc")
+	if err := s.RecordSupervisedTaskActive(ctx, task.ID, "mac", "s-conc-1", "boot-conc"); err != nil {
+		t.Fatal(err)
+	}
+	restartAt := time.Date(2026, 11, 26, 11, 0, 0, 0, time.UTC)
+	f.mu.Lock()
+	f.sessions["mac"] = []proto.Session{{
+		MachineID:      "mac",
+		SessionID:      "s-conc-1",
+		Agent:          "claude",
+		Status:         proto.StatusInterrupted,
+		Capabilities:   &proto.SessionCapabilities{Read: true, Terminal: true, StopCause: proto.StopRestart},
+		ReadOnlyReason: "stopped",
+		UpdatedAt:      restartAt,
+	}}
+	f.mu.Unlock()
+
+	var wg sync.WaitGroup
+	startGate := make(chan struct{})
+	for i := range 6 {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-startGate
+			if idx%2 == 0 {
+				s.onNodeReconnectedForRestartRecovery(ctx, "mac")
+			} else {
+				s.maybeRunNodeRestartRecovery(ctx, nil)
+			}
+		}(i)
+	}
+	close(startGate)
+	<-entered
+	close(release)
+	wg.Wait()
+
+	if starts := startCalls(f); len(starts) != 1 {
+		t.Fatalf("concurrent NodeConnected + superviseWatch must resume exactly once, got %d starts: %+v", len(starts), starts)
+	}
+}
+
+func TestRestartAutoResumeCooldownResetAndNonOfflineFailureNoSpam(t *testing.T) {
+	s, f := newQuietServiceOn(t, nil)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	ctx := context.Background()
+	setRestartAutoResumeSetting(t, s, true)
+
+	now := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	s.setRestartRecoveryClock(func() time.Time { return now })
+
+	f.mu.Lock()
+	f.devices = []Device{{ID: "mac", Name: "Mac", Online: true, Reachable: true}}
+	f.mu.Unlock()
+
+	// Part 1: 2 restarts within 1h exhaust cap, then advancing clock past cooldown resets attempts cleanly.
+	task := setupSupervisedRecoveryTaskOnMachine(t, s, f, "mac", "Cooldown task", "s-cool", "assistant", []string{"Done."}, true)
+	if err := s.RecordSupervisedTaskActive(ctx, task.ID, "mac", "s-cool", "boot-0"); err != nil {
+		t.Fatal(err)
+	}
+	idle := []proto.Session{{MachineID: "mac", SessionID: "s-cool", Status: proto.StatusIdle}}
+	if res, err := s.RunRestartRecoverySweep(ctx, "boot-1", idle); err != nil || len(res.RecoveredTodoIDs) != 1 {
+		t.Fatalf("boot-1 expected recover: res=%+v err=%v", res, err)
+	}
+	now = now.Add(5 * time.Minute)
+	if res, err := s.RunRestartRecoverySweep(ctx, "boot-2", idle); err != nil || len(res.RecoveredTodoIDs) != 1 {
+		t.Fatalf("boot-2 expected recover: res=%+v err=%v", res, err)
+	}
+	now = now.Add(5 * time.Minute)
+	if res, err := s.RunRestartRecoverySweep(ctx, "boot-3", idle); err != nil || len(res.EscalatedTodoIDs) != 1 {
+		t.Fatalf("boot-3 expected cap escalation: res=%+v err=%v", res, err)
+	}
+	// Advance 2 hours (> 1h cooldown): genuine deploy later resets persisted attempts and recovers once more.
+	now = now.Add(2 * time.Hour)
+	if res, err := s.RunRestartRecoverySweep(ctx, "boot-4", idle); err != nil || len(res.RecoveredTodoIDs) != 1 {
+		t.Fatalf("boot-4 after cooldown expected recover: res=%+v err=%v", res, err)
+	}
+
+	// Part 2: Permanent non-offline resume failure escalates once and does not retry every tick.
+	failCalls := 0
+	f.answerNode(DeviceSessionStart, func(_ string, _ json.RawMessage) (any, error) {
+		failCalls++
+		return nil, errors.New("runtime rejected resume")
+	})
+	failTask := setupSupervisedRecoveryTaskOnMachine(t, s, f, "mac", "Failing resume task", "s-fail-resume", "assistant", []string{"Done."}, false)
+	if err := s.RecordSupervisedTaskActive(ctx, failTask.ID, "mac", "s-fail-resume", "boot-4"); err != nil {
+		t.Fatal(err)
+	}
+	interrupted := []proto.Session{{
+		MachineID:      "mac",
+		SessionID:      "s-fail-resume",
+		Agent:          "claude",
+		Status:         proto.StatusInterrupted,
+		Capabilities:   &proto.SessionCapabilities{Read: true, Terminal: true, StopCause: proto.StopRestart},
+		ReadOnlyReason: "stopped",
+		UpdatedAt:      now,
+	}}
+	resFail1, err := s.RunRestartRecoverySweep(ctx, "boot-5", interrupted)
+	if err != nil || len(resFail1.EscalatedTodoIDs) != 1 || failCalls != 1 {
+		t.Fatalf("expected 1 failure escalation on first sweep: res=%+v calls=%d err=%v", resFail1, failCalls, err)
+	}
+	resFail2, err := s.RunRestartRecoverySweep(ctx, "boot-5", interrupted)
+	if err != nil || len(resFail2.EscalatedTodoIDs) != 0 || failCalls != 1 {
+		t.Fatalf("repeat sweep in same cycle must not retry permanently failed resume: res=%+v calls=%d err=%v", resFail2, failCalls, err)
 	}
 }

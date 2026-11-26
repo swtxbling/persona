@@ -1405,14 +1405,27 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		s.remedyWatch(ctx, t, now, history) // a failed start's kept tab expired (start_remedy.go)
 		t = s.checkTaskHandoff(ctx, t, now)
 		agents := s.taskAgentsIn(ctx, t, lists)
+		anyWorking := false
+		var latestAgentUpdate time.Time
 		for _, c := range agents {
+			if c.UpdatedAt.After(latestAgentUpdate) {
+				latestAgentUpdate = c.UpdatedAt
+			}
 			if c.State == proto.StateWorking {
 				s.observeProgress(c, now)
 			}
-			if restartAutoResume && (c.State == proto.StateWorking || strings.EqualFold(strings.TrimSpace(c.Status), proto.StatusWorking)) {
-				if err := s.RecordSupervisedTaskActive(ctx, t.ID, c.MachineID, c.SessionID, s.runtimeBootEpoch()); err != nil {
-					s.logf("restart recovery checkpoint %s: %v", t.ID, err)
+			if c.State == proto.StateWorking || strings.EqualFold(strings.TrimSpace(c.Status), proto.StatusWorking) {
+				anyWorking = true
+				if restartAutoResume {
+					if err := s.RecordSupervisedTaskActive(ctx, t.ID, c.MachineID, c.SessionID, s.runtimeBootEpoch()); err != nil {
+						s.logf("restart recovery checkpoint %s: %v", t.ID, err)
+					}
 				}
+			}
+		}
+		if restartAutoResume && !anyWorking && len(agents) > 0 {
+			if err := s.ClearTodoRecoveryCheckpointIfEpoch(ctx, t.ID, s.runtimeBootEpoch(), latestAgentUpdate); err != nil {
+				s.logf("restart recovery clear idle checkpoint %s: %v", t.ID, err)
 			}
 		}
 		if todosV2 {

@@ -57,9 +57,8 @@ func TestTodosV2RestartRecoveryBypassWhenFlagOff(t *testing.T) {
 	s, f := newQuietServiceOn(t, nil)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 	ctx := context.Background()
-	setRestartAutoResumeSetting(t, s, false)
-	if s.settings(ctx).restartAutoResumeOn() {
-		t.Fatal("expected restart_auto_resume to be false")
+	if s.settings(ctx).todosV2On() {
+		t.Fatal("expected todos_v2 default to be false")
 	}
 
 	task := setupSupervisedRecoveryTask(t, s, f, "Flag-off supervised task", "s-off", "assistant", []string{"All checks pass."})
@@ -380,15 +379,15 @@ func TestTodosV2RestartRecoveryLosslessRollbackWhenFlagDisabled(t *testing.T) {
 		t.Fatalf("expected recovery while todos_v2=true: res=%+v err=%v", res1, err)
 	}
 
-	// Disable restart_auto_resume -> immediate lossless rollback, zero further recovery activity.
-	setRestartAutoResumeSetting(t, s, false)
+	// Disable todos_v2 -> immediate lossless rollback, zero further recovery activity.
+	setRestartRecoveryTodosV2(t, s, false, true)
 	res2, err := s.RunRestartRecoverySweep(ctx, "boot-3", []proto.Session{
 		{MachineID: "mac", SessionID: "s-rb", Status: proto.StatusIdle},
 	})
 	if err != nil || len(res2.RecoveredTodoIDs) != 0 || len(res2.EscalatedTodoIDs) != 0 {
-		t.Fatalf("disabling restart_auto_resume must immediately bypass recovery: res=%+v err=%v", res2, err)
+		t.Fatalf("disabling todos_v2 must immediately bypass recovery: res=%+v err=%v", res2, err)
 	}
 	if len(sentToAgent(f)) != 1 {
-		t.Fatalf("expected no additional messages after disabling restart_auto_resume, got %d", len(sentToAgent(f)))
+		t.Fatalf("expected no additional messages after disabling todos_v2, got %d", len(sentToAgent(f)))
 	}
 }

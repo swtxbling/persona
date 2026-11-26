@@ -130,7 +130,8 @@ type Settings struct {
 	// projection under todos_v2=true (#16098). nil is true (the default).
 	TodosV2FoldChildren *bool `json:"todos_v2_fold_children,omitempty"`
 	// RestartAutoResume controls whether open supervised task Agents interrupted by a hub or node
-	// service restart are automatically resumed with bounded crash-loop protection. nil is true (the default).
+	// service restart are automatically resumed with bounded crash-loop protection. nil defaults to
+	// off (unless todos_v2 is enabled); explicit true/false always takes precedence.
 	RestartAutoResume *bool `json:"restart_auto_resume,omitempty"`
 	// IntegrationsV2 enables the unified experimental Integrations & Extensions experience (#14802, #14805). nil is off (the default).
 	IntegrationsV2 *bool `json:"integrations_v2,omitempty"`
@@ -402,7 +403,10 @@ func (v Settings) workGuideOn() bool      { return v.WorkGuide != nil && *v.Work
 func (v Settings) todosV2On() bool        { return v.TodosV2 != nil && *v.TodosV2 }
 func (v Settings) integrationsV2On() bool { return v.IntegrationsV2 != nil && *v.IntegrationsV2 }
 func (v Settings) restartAutoResumeOn() bool {
-	return v.RestartAutoResume == nil || *v.RestartAutoResume
+	if v.RestartAutoResume != nil {
+		return *v.RestartAutoResume
+	}
+	return v.todosV2On()
 }
 
 func (v Settings) todosV2AutoSeenMode() string {

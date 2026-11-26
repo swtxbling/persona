@@ -521,7 +521,6 @@ func TestTodosV2RuntimeLoopsBypassWhenFlagOff(t *testing.T) {
 		return todoBlockerPRFact{URL: prURL, State: "merged", Merged: true}, true
 	})
 
-	setRestartAutoResumeSetting(t, s, false)
 	s.setBootEpoch("boot-now")
 	s.superviseWatch(ctx, time.Now())
 

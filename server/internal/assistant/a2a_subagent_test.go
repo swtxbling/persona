@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -21,9 +23,11 @@ import (
 // under `go test -race` even when PERSONA_TEST_DATABASE_URL is not configured.
 type memA2AStore struct {
 	memStore
-	mu            sync.Mutex
-	rows          map[string]db.A2ARow
-	launchQueries int
+	mu              sync.Mutex
+	rows            map[string]db.A2ARow
+	launchQueries   int
+	launchTargets   int
+	launchTargetHit map[[2]string]int
 }
 
 func newMemA2AStore() *memA2AStore {
@@ -161,9 +165,14 @@ func (m *memA2AStore) A2ALaunchesForTargets(_ context.Context, machine string, s
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.launchQueries++
+	m.launchTargets += len(sessions)
+	if m.launchTargetHit == nil {
+		m.launchTargetHit = map[[2]string]int{}
+	}
 	want := make(map[string]bool, len(sessions))
 	for _, sid := range sessions {
 		want[sid] = true
+		m.launchTargetHit[[2]string{machine, sid}]++
 	}
 	var out []db.A2ARow
 	for _, r := range m.rows {
@@ -726,4 +735,359 @@ func TestLegacySpawnedSubagentLoadsWithoutInitializingTodos(t *testing.T) {
 	if st2Calls != 0 {
 		t.Fatalf("already-loaded todos still queried ListAllTodoAgents %d times", st2Calls)
 	}
+}
+
+func (m *memA2AStore) launchCounts() (queries, targets int, hits map[[2]string]int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.launchQueries, m.launchTargets, maps.Clone(m.launchTargetHit)
+}
+
+func saveTestAgentArchives(t *testing.T, s *Service, records map[string]agentArchive) {
+	t.Helper()
+	ctx := context.Background()
+	if err := s.agentArchives.lock(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.agentArchives.unlock()
+	if err := s.loadAgentArchivesLocked(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.saveAgentArchivesLocked(ctx, maps.Clone(records)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func hasCheckedSession(s *Service, machine, sid string) bool {
+	s.fleet.subagentsMu.RLock()
+	defer s.fleet.subagentsMu.RUnlock()
+	_, ok := s.fleet.subagentsChecked[machine][sid]
+	return ok
+}
+
+// Alternating decoratedApart (publishList when ArchivedApart=true) and decoratedInto (liveLoop)
+// must not ping-pong archived negative entries in subagentsChecked: archived.rows and archive-only
+// keys remain retained while present, true removals of archived or live sessions still prune,
+// positive subagent hits and other machines stay untouched, and archived rows never enter shown
+// or foldMeta.
+func TestDecoratedApartIntoNoSubagentPingPong(t *testing.T) {
+	ctx := context.Background()
+	st := newMemA2AStore()
+	f := newFakeHub()
+	f.hello.ArchivedApart = true
+	d := newFleetDevs()
+	d.add("mac", "Mac")
+	d.add("box", "Box")
+	s := New(Options{Hub: f, Devices: d, Store: func() Store { return st }, Logf: testLogf(t)})
+
+	// Seed one live positive A2A subagent and one archive-only positive A2A subagent on mac,
+	// plus a cross-machine child on box pointing to mac/lead so foldMeta["mac"] is exercised.
+	body, _ := json.Marshal(a2aBody{Launch: &a2aLaunch{CWD: "/code/app", Subagent: true}})
+	for _, row := range []db.A2ARow{
+		{
+			ID: "task-live-1", Owner: "mac/lead", Request: "req-live-1", Context: "ctx-live-1",
+			SourceMachine: "mac", SourceSession: "lead", TargetMachine: "mac", TargetSession: "sub-live",
+			State: a2aWorking, Body: body,
+		},
+		{
+			ID: "task-arch-1", Owner: "mac/lead", Request: "req-arch-1", Context: "ctx-arch-1",
+			SourceMachine: "mac", SourceSession: "lead", TargetMachine: "mac", TargetSession: "sub-arch-only",
+			State: a2aComplete, Body: body,
+		},
+		{
+			ID: "task-cross-1", Owner: "mac/lead", Request: "req-cross-1", Context: "ctx-cross-1",
+			SourceMachine: "mac", SourceSession: "lead", TargetMachine: "box", TargetSession: "box-cross-sub",
+			State: a2aWorking, Body: body,
+		},
+	} {
+		if _, err := st.A2ACreate(ctx, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	at := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	mkRow := func(machine, id string) proto.Session {
+		return proto.Session{
+			MachineID: machine, SessionID: id, Status: proto.StatusIdle,
+			Cwd: "/code/app", Agent: "claude", UpdatedAt: at,
+		}
+	}
+
+	macLive := []proto.Session{
+		mkRow("mac", "lead"),
+		mkRow("mac", "live-removable"),
+		mkRow("mac", "sub-live"),
+		mkRow("mac", "arch-live-1"),
+		mkRow("mac", "arch-live-removable"),
+	}
+	boxLive := []proto.Session{
+		mkRow("box", "box-live-1"),
+		mkRow("box", "box-cross-sub"),
+	}
+	d.setSessions("mac", macLive)
+	d.setSessions("box", boxLive)
+
+	records := map[string]agentArchive{
+		runtimeListID("mac", "arch-live-1"):         {Session: archiveSnapshot(mkRow("mac", "arch-live-1")), Archived: true, ChangedAt: at.Add(time.Hour)},
+		runtimeListID("mac", "arch-live-removable"): {Session: archiveSnapshot(mkRow("mac", "arch-live-removable")), Archived: true, ChangedAt: at.Add(time.Hour)},
+		runtimeListID("mac", "arch-only-1"):         {Session: archiveSnapshot(mkRow("mac", "arch-only-1")), Archived: true, ChangedAt: at.Add(time.Hour)},
+		runtimeListID("mac", "arch-only-removable"): {Session: archiveSnapshot(mkRow("mac", "arch-only-removable")), Archived: true, ChangedAt: at.Add(time.Hour)},
+		runtimeListID("mac", "sub-arch-only"):       {Session: archiveSnapshot(mkRow("mac", "sub-arch-only")), Archived: true, ChangedAt: at.Add(time.Hour)},
+		runtimeListID("mac", "restored-only-1"):     {Session: archiveSnapshot(mkRow("mac", "restored-only-1")), Archived: false, ChangedAt: at.Add(time.Hour)},
+		// box records include a colliding session ID ("live-removable") to verify cross-machine isolation.
+		runtimeListID("box", "box-arch-only"):  {Session: archiveSnapshot(mkRow("box", "box-arch-only")), Archived: true, ChangedAt: at.Add(time.Hour)},
+		runtimeListID("box", "live-removable"): {Session: archiveSnapshot(mkRow("box", "live-removable")), Archived: true, ChangedAt: at.Add(time.Hour)},
+	}
+	if err := st.PutSetting(ctx, agentArchivesKey, records); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Cold load box first so its bucket and cross-machine fold edge are established.
+	_ = s.decoratedInto("box", nil)
+	_, _ = s.decoratedApart("box", s.archiveMark())
+	for _, sid := range []string{"box-live-1", "box-cross-sub", "box-arch-only", "live-removable"} {
+		if !hasCheckedSession(s, "box", sid) {
+			t.Fatalf("box/%s not cached after cold load", sid)
+		}
+	}
+
+	// 2. Cold load mac via decoratedApart then decoratedInto.
+	shown, archived := s.decoratedApart("mac", s.archiveMark())
+	shownIDs := make(map[string]bool, len(shown))
+	for _, r := range shown {
+		if r.Archived && !r.Assistant {
+			t.Fatalf("decoratedApart leaked archived row %q into shown", r.SessionID)
+		}
+		shownIDs[r.SessionID] = true
+	}
+	for _, want := range []string{"lead", "live-removable", "sub-live", "restored-only-1"} {
+		if !shownIDs[want] {
+			t.Fatalf("shown missing %q: %v", want, shownIDs)
+		}
+	}
+	for _, forbid := range []string{"arch-live-1", "arch-live-removable", "arch-only-1", "arch-only-removable", "sub-arch-only"} {
+		if shownIDs[forbid] {
+			t.Fatalf("archived session %q leaked into shown", forbid)
+		}
+	}
+	if len(archived.rows) != 2 || len(archived.keys) != 3 {
+		t.Fatalf("unexpected archived split: rows=%d keys=%d", len(archived.rows), len(archived.keys))
+	}
+	for _, r := range archived.rows {
+		if r.FoldedUnder() != "" || r.Children() != (proto.SessionChildren{}) {
+			t.Fatalf("archived row %q unexpectedly folded: under=%q children=%+v", r.SessionID, r.FoldedUnder(), r.Children())
+		}
+	}
+	leadRow := rowNamed(shown, "lead")
+	if leadRow == nil || leadRow.Children().Total != 2 {
+		t.Fatalf("lead children = %+v, want Total=2 (mac/sub-live + box/box-cross-sub)", leadRow)
+	}
+	// Verify foldMeta["mac"] excludes archived rows and archive-only keys.
+	s.fleet.foldMu.Lock()
+	metaIDs := map[string]bool{}
+	for _, e := range s.fleet.foldMeta["mac"] {
+		metaIDs[e.sessionID] = true
+	}
+	s.fleet.foldMu.Unlock()
+	if len(metaIDs) == 0 {
+		t.Fatal("expected foldMeta[mac] to be populated for cross-machine fold")
+	}
+	for _, forbid := range []string{"arch-live-1", "arch-live-removable", "arch-only-1", "arch-only-removable", "sub-arch-only"} {
+		if metaIDs[forbid] {
+			t.Fatalf("archived session %q entered foldMeta[mac]", forbid)
+		}
+	}
+
+	whole := s.decoratedInto("mac", nil)
+	subArchRow := rowNamed(whole, "sub-arch-only")
+	if subArchRow == nil || !subArchRow.IsSubagent || subArchRow.A2ATaskID() != "task-arch-1" {
+		t.Fatalf("sub-arch-only missing subagent provenance in decoratedInto: %+v", subArchRow)
+	}
+
+	coldQueries, coldTargets, coldHits := st.launchCounts()
+	if coldQueries == 0 {
+		t.Fatal("expected cold passes to query A2ALaunchesForTargets")
+	}
+
+	// 3. Repeated alternating decoratedApart / decoratedInto must do ZERO A2ALaunchesForTargets queries.
+	var buf []proto.Session
+	for round := range 5 {
+		shown, archived = s.decoratedApart("mac", s.archiveMark())
+		if len(shown) != 4 || len(archived.rows) != 2 || len(archived.keys) != 3 {
+			t.Fatalf("round %d apart counts changed: shown=%d rows=%d keys=%d", round, len(shown), len(archived.rows), len(archived.keys))
+		}
+		buf = s.decoratedInto("mac", buf)
+	}
+	// Back-to-back calls in each direction must also stay at zero queries.
+	_, _ = s.decoratedApart("mac", s.archiveMark())
+	_, _ = s.decoratedApart("mac", s.archiveMark())
+	buf = s.decoratedInto("mac", buf)
+	buf = s.decoratedInto("mac", buf)
+
+	warmQueries, warmTargets, warmHits := st.launchCounts()
+	if warmQueries != coldQueries || warmTargets != coldTargets {
+		t.Fatalf("ping-pong queried A2ALaunchesForTargets %d extra times (%d extra targets) after cold load: coldHits=%v warmHits=%v",
+			warmQueries-coldQueries, warmTargets-coldTargets, coldHits, warmHits)
+	}
+	for _, sid := range []string{"arch-live-1", "arch-live-removable", "arch-only-1", "arch-only-removable"} {
+		if warmHits[[2]string{"mac", sid}] != coldHits[[2]string{"mac", sid}] {
+			t.Fatalf("archived negative entry mac/%s re-queried: cold=%d warm=%d",
+				sid, coldHits[[2]string{"mac", sid}], warmHits[[2]string{"mac", sid}])
+		}
+	}
+
+	// 4. Removing a live session prunes only mac/live-removable (even though box has an archived "live-removable").
+	d.setSessions("mac", []proto.Session{
+		mkRow("mac", "lead"),
+		mkRow("mac", "sub-live"),
+		mkRow("mac", "arch-live-1"),
+		mkRow("mac", "arch-live-removable"),
+	})
+	_, _ = s.decoratedApart("mac", s.archiveMark())
+	if hasCheckedSession(s, "mac", "live-removable") {
+		t.Fatal("removed live session mac/live-removable was not pruned")
+	}
+	for _, kept := range []string{"lead", "sub-live", "arch-live-1", "arch-live-removable", "arch-only-1", "arch-only-removable", "sub-arch-only", "restored-only-1"} {
+		if !hasCheckedSession(s, "mac", kept) {
+			t.Fatalf("mac/%s was prematurely pruned after removing live-removable", kept)
+		}
+	}
+	for _, boxSID := range []string{"box-live-1", "box-cross-sub", "box-arch-only", "live-removable"} {
+		if !hasCheckedSession(s, "box", boxSID) {
+			t.Fatalf("other machine box/%s was affected by mac prune", boxSID)
+		}
+	}
+
+	// 5. Removing both a node-listed archived session and an archive-only session prunes both from mac,
+	// while keeping remaining archived entries, positive subagent hits, and box untouched.
+	d.setSessions("mac", []proto.Session{
+		mkRow("mac", "lead"),
+		mkRow("mac", "sub-live"),
+		mkRow("mac", "arch-live-1"),
+	})
+	delete(records, runtimeListID("mac", "arch-live-removable"))
+	delete(records, runtimeListID("mac", "arch-only-removable"))
+	delete(records, runtimeListID("mac", "sub-arch-only"))
+	saveTestAgentArchives(t, s, records)
+
+	_, _ = s.decoratedApart("mac", s.archiveMark())
+	if hasCheckedSession(s, "mac", "arch-live-removable") {
+		t.Fatal("removed node-listed archived session mac/arch-live-removable was not pruned")
+	}
+	if hasCheckedSession(s, "mac", "arch-only-removable") {
+		t.Fatal("removed archive-only session mac/arch-only-removable was not pruned")
+	}
+	// Positive subagent cache hit stays retained even after the archive record is removed.
+	if !hasCheckedSession(s, "mac", "sub-arch-only") {
+		t.Fatal("positive subagent hit mac/sub-arch-only was pruned")
+	}
+	for _, kept := range []string{"lead", "sub-live", "arch-live-1", "arch-only-1", "restored-only-1"} {
+		if !hasCheckedSession(s, "mac", kept) {
+			t.Fatalf("mac/%s was prematurely pruned after archive removal", kept)
+		}
+	}
+	for _, boxSID := range []string{"box-live-1", "box-cross-sub", "box-arch-only", "live-removable"} {
+		if !hasCheckedSession(s, "box", boxSID) {
+			t.Fatalf("other machine box/%s was affected by mac archive prune", boxSID)
+		}
+	}
+
+	afterPruneQueries, _, _ := st.launchCounts()
+	if afterPruneQueries != coldQueries {
+		t.Fatalf("removals triggered unexpected A2ALaunchesForTargets queries: before=%d after=%d", coldQueries, afterPruneQueries)
+	}
+
+	// 6. When arch-live-1 leaves the node list while still in archive records, it transitions from
+	// archived.rows to archived.keys (leaving archived.rows empty) and stays cached with zero queries;
+	// removing its archive record then prunes it while keeping arch-only-1.
+	d.setSessions("mac", []proto.Session{
+		mkRow("mac", "lead"),
+		mkRow("mac", "sub-live"),
+	})
+	_, archived = s.decoratedApart("mac", s.archiveMark())
+	if len(archived.rows) != 0 || len(archived.keys) != 2 {
+		t.Fatalf("expected 0 archived.rows and 2 archive-only keys, got rows=%d keys=%d", len(archived.rows), len(archived.keys))
+	}
+	if !hasCheckedSession(s, "mac", "arch-live-1") || !hasCheckedSession(s, "mac", "arch-only-1") {
+		t.Fatalf("archive-only keys prematurely pruned: arch-live-1=%v arch-only-1=%v",
+			hasCheckedSession(s, "mac", "arch-live-1"), hasCheckedSession(s, "mac", "arch-only-1"))
+	}
+	buf = s.decoratedInto("mac", buf)
+
+	delete(records, runtimeListID("mac", "arch-live-1"))
+	saveTestAgentArchives(t, s, records)
+
+	_, archived = s.decoratedApart("mac", s.archiveMark())
+	if len(archived.rows) != 0 || len(archived.keys) != 1 {
+		t.Fatalf("expected 0 archived.rows and 1 archive-only key, got rows=%d keys=%d", len(archived.rows), len(archived.keys))
+	}
+	if hasCheckedSession(s, "mac", "arch-live-1") {
+		t.Fatal("removed mac/arch-live-1 was not pruned")
+	}
+	if !hasCheckedSession(s, "mac", "arch-only-1") {
+		t.Fatal("archive-only key mac/arch-only-1 was pruned when archived.rows was empty")
+	}
+	_ = s.decoratedInto("mac", buf)
+	finalQueries, _, _ := st.launchCounts()
+	if finalQueries != coldQueries {
+		t.Fatalf("archive-only decoratedApart -> decoratedInto re-queried DB: cold=%d final=%d", coldQueries, finalQueries)
+	}
+}
+
+// BenchmarkDecoratedApartIntoSubagentQueries measures A2ALaunchesForTargets query churn across
+// alternating decoratedApart (publishList) and decoratedInto (liveLoop) rounds with no sleeps.
+func BenchmarkDecoratedApartIntoSubagentQueries(b *testing.B) {
+	ctx := context.Background()
+	st := newMemA2AStore()
+	f := newFakeHub()
+	f.hello.ArchivedApart = true
+	d := newFleetDevs()
+	d.add("mac", "Mac")
+	s := New(Options{Hub: f, Devices: d, Store: func() Store { return st }})
+
+	at := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	live := make([]proto.Session, 70)
+	records := map[string]agentArchive{}
+	for i := range live {
+		sid := fmt.Sprintf("live-%03d", i)
+		live[i] = proto.Session{
+			MachineID: "mac", SessionID: sid, Status: proto.StatusIdle,
+			Cwd: "/code/app", Agent: "claude", UpdatedAt: at,
+		}
+		if i >= 50 {
+			records[runtimeListID("mac", sid)] = agentArchive{
+				Session: archiveSnapshot(live[i]), Archived: true, ChangedAt: at.Add(time.Hour),
+			}
+		}
+	}
+	for i := range 200 {
+		sid := fmt.Sprintf("arch-only-%03d", i)
+		row := proto.Session{
+			MachineID: "mac", SessionID: sid, Status: proto.StatusIdle,
+			Cwd: "/code/app", Agent: "claude", UpdatedAt: at,
+		}
+		records[runtimeListID("mac", sid)] = agentArchive{
+			Session: archiveSnapshot(row), Archived: true, ChangedAt: at.Add(time.Hour),
+		}
+	}
+	d.setSessions("mac", live)
+	if err := st.PutSetting(ctx, agentArchivesKey, records); err != nil {
+		b.Fatal(err)
+	}
+
+	// Cold warm-up of both paths.
+	_, _ = s.decoratedApart("mac", s.archiveMark())
+	buf := s.decoratedInto("mac", nil)
+
+	startQ, startT, _ := st.launchCounts()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = s.decoratedApart("mac", s.archiveMark())
+		buf = s.decoratedInto("mac", buf)
+	}
+	b.StopTimer()
+	endQ, endT, _ := st.launchCounts()
+	b.ReportMetric(float64(endQ-startQ)/float64(b.N), "queries/op")
+	b.ReportMetric(float64(endT-startT)/float64(b.N), "targets/op")
 }

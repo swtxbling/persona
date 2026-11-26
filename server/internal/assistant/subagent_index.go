@@ -355,9 +355,10 @@ func (s *Service) decorateSubagents(ctx context.Context, machine string, list []
 }
 
 // pruneSubagentChecked drops negative lookup entries for sessions no longer in machine's final
-// complete list (including archived sessions) while retaining known positive subagent hits.
+// complete list (including archived rows and archive-only keys kept apart in retained) while
+// retaining known positive subagent hits.
 // Entries are partitioned per machine so pruning scans only machine's own bucket, never the fleet.
-func (s *Service) pruneSubagentChecked(machine string, list []proto.Session) {
+func (s *Service) pruneSubagentChecked(machine string, list []proto.Session, retained *archivedPart) {
 	f := &s.fleet
 	f.subagentsMu.RLock()
 	n := len(f.subagentsChecked[machine])
@@ -365,10 +366,28 @@ func (s *Service) pruneSubagentChecked(machine string, list []proto.Session) {
 	if n == 0 {
 		return
 	}
-	listed := make(map[string]struct{}, len(list))
+	capHint := len(list)
+	if retained != nil {
+		capHint += len(retained.rows) + len(retained.keys)
+	}
+	listed := make(map[string]struct{}, capHint)
 	for i := range list {
 		if sid := list[i].SessionID; sid != "" {
 			listed[sid] = struct{}{}
+		}
+	}
+	if retained != nil {
+		for i := range retained.rows {
+			if sid := retained.rows[i].SessionID; sid != "" {
+				listed[sid] = struct{}{}
+			}
+		}
+		for _, key := range retained.keys {
+			if rec, ok := retained.records[key]; ok {
+				if (rec.Session.MachineID == "" || rec.Session.MachineID == machine) && rec.Session.SessionID != "" {
+					listed[rec.Session.SessionID] = struct{}{}
+				}
+			}
 		}
 	}
 	f.subagentsMu.Lock()

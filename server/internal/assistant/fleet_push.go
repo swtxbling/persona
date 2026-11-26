@@ -554,14 +554,15 @@ const linkRangWait = 2 * time.Second
 // summary merged with newer cards may list it in More, a notification may be dropped before it is handed over, a link
 // may go.
 func (s *Service) notifyInteraction(ix proto.Interaction, machine string, covered bool) {
-	s.notifyInteractionAt(ix, machine, covered, "", "")
+	s.notifyInteractionAt(ix, machine, covered, "", "", "")
 }
 
-// notifyInteractionAt is notifyInteraction with a push level and related key for the hub's low-distraction mode ("": derived).
-func (s *Service) notifyInteractionAt(ix proto.Interaction, machine string, covered bool, level, key string) {
+// notifyInteractionAt is notifyInteraction with a push level, related key and escalation why_owner for the hub's
+// low-distraction mode and card ledger ("": derived / unspecified).
+func (s *Service) notifyInteractionAt(ix proto.Interaction, machine string, covered bool, level, key, whyOwner string) {
 	n := Notification{Kind: assistantwire.NotifyInput, DeviceID: ix.MachineID, Subtitle: machine, SessionID: ix.SessionID,
 		Interaction: &ix, Level: level, RelatedKey: key}
-	src := s.inputCardSource(ix, level != "" || key != "") // a level or key: ask_route rang it (card_layers.go)
+	src := s.inputCardSourceWithWhy(ix, level != "" || key != "" || whyOwner != "", whyOwner) // a level, key or why_owner: ask_route rang it (card_layers.go)
 	if !covered || s.devs == nil {
 		s.deliverCard(src, n)
 		return

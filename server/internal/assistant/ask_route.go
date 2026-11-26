@@ -547,12 +547,12 @@ func (s *Service) ringAsks(todo string, ids []string, d *proto.Delegate, esc esc
 			s.recordConfirmationNotification(ix)
 			s.heldAnnounced(ix.ID) // no Feishu card or channel message, now or when the channels catch up
 			if !pushed {
-				s.notifyInteractionAt(ix, s.machineName(ix.MachineID), false, esc.level, esc.key)
+				s.notifyInteractionAt(ix, s.machineName(ix.MachineID), false, esc.level, esc.key, esc.whyOwner)
 			}
 		case esc.level != "":
 			s.recordConfirmationNotification(ix)
 			if !pushed && !s.muted(ix.MachineID, ix.SessionID) {
-				s.notifyInteractionAt(ix, s.machineName(ix.MachineID), s.linkCovers(ix), esc.level, esc.key)
+				s.notifyInteractionAt(ix, s.machineName(ix.MachineID), s.linkCovers(ix), esc.level, esc.key, esc.whyOwner)
 				go s.threadAgentAsks(ix)
 			}
 			s.InteractionAnnounced(context.Background(), InteractionAnnounced{Interaction: ix})
@@ -596,11 +596,11 @@ func (s *Service) waitingCards(t Todo, terminalOnly bool) []string {
 
 // ---- ask_escalate (prompts/mcp/agents) ----
 
-// escalation is how an escalated card rings (ringAsks): its push level and related key, and whether low-distraction mode holds it
-// back from the phone. The zero value is a timeout's: the level the hub derives, as before.
+// escalation is how an escalated card rings (ringAsks): its push level, related key and why_owner, and whether
+// low-distraction mode holds it back from the phone. The zero value is a timeout's: the level the hub derives, as before.
 type escalation struct {
-	level, key string
-	held       bool
+	level, key, whyOwner string
+	held                 bool
 }
 
 // quietPushWhys are the why_owner values whose escalation still pushes in low-distraction mode: what cannot be undone, what other
@@ -657,7 +657,7 @@ func (s *Service) toolAskEscalate(ctx context.Context, self string, args json.Ra
 	if len(ids) == 0 {
 		return "", fmt.Errorf("task %s has no card waiting that the user has not been told of", t.ID)
 	}
-	esc := escalation{level: escalateLevel(a.WhyOwner, a.P0)}
+	esc := escalation{level: escalateLevel(a.WhyOwner, a.P0), whyOwner: a.WhyOwner}
 	esc.held = esc.level != assistantwire.LevelP0 && s.quietModeOn(ctx)
 	rung := s.ringAsks(t.ID, ids, &proto.Delegate{Reason: reason, Recommend: recommend}, esc)
 	if len(rung) == 0 {

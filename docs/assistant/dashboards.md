@@ -295,8 +295,9 @@ The only push a page ever makes, decided by the manager from the owner's switch 
 - it pushes when the alert is on, the new reading trips, the reading before it did not (or there was none), and the
   page has not pushed in the last 12 hours. Staying tripped never pushes again; a reading that does not trip re-arms
   it; turning the switch on while tripped does not push ("pushes" in the fixture);
-- the push: source `page_alert` (kind 1 of the card ledger: the owner switched it on, as their own reminders), level
-  P1 (held for the briefing in low-distraction mode), the page's title, the question and the reading in words, then
+- the push: source `page_alert` (kind 7, `cardCatSubscribed`, of the card ledger: an owner-subscribed alert, neither a
+  decision nor a bug), level P1 (held for the briefing in low-distraction mode and counted separately under `Held` when
+  held), the page's title, the question and the reading in words, then
   `alert_text` if the reading came with one; related key `page-alert:<page id>`. Tapping it opens the app, not yet the
   page: a push carries no destination for now (#15417).
 

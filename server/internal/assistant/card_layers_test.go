@@ -622,3 +622,96 @@ func TestCardLedgerReportIncludesPerKindBreakdown(t *testing.T) {
 		t.Errorf("held ask_held leaked into Bugs line:\n%s", report)
 	}
 }
+
+// End-to-end production path: toolAskEscalate threads why_owner through escalation -> ringAsks -> notifyInteractionAt
+// -> inputCardSourceWithWhy -> deliverCard so the ledger records per-why_owner sources (2/3/5/1) instead of collapsing
+// into legacy ask_escalated, and records held escalations under Held without inflating pushed counts.
+func TestToolAskEscalateAndNotifyInteractionAtCategorizeByWhyOwner(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		why     string
+		wantSrc string
+		wantCat int
+		held    bool
+	}{
+		{"only_owner_knows", whyOnlyOwnerKnow, cardAskEscalatedOwnerKnows, cardCatOwnerKnows, false},
+		{"visible_to_others", whyVisible, cardAskEscalatedOutward, cardCatOutward, false},
+		{"irreversible", whyIrreversible, cardAskEscalatedIrreversible, cardCatIrreversible, false},
+		{"priority", whyPriority, cardAskEscalatedDirection, cardCatDirection, false},
+		{"acceptance", whyAcceptance, cardAskEscalatedDirection, cardCatDirection, false},
+		{"omitted_why_owner", "", cardAskEscalated, cardCatDirection, false},
+		{"priority_held_by_push_grading", whyPriority, cardAskEscalatedDirection, cardCatDirection, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newRouteEnv(t, nil, true)
+			if tc.held {
+				e.f.mu.Lock()
+				e.f.notifyResult = NotifyResult{OK: true, Held: true, Reason: "ln_p1_held"}
+				e.f.mu.Unlock()
+			}
+			ix := askPermission("ix_"+tc.name, "worker-1")
+			answered := e.raise(ix)
+			e.noticeWith("lead1", "interaction_id="+ix.ID)
+
+			args := map[string]any{"todo_id": e.todo.ID, "reason": "Owner decision needed", "recommend": "Proceed"}
+			if tc.why != "" {
+				args["why_owner"] = tc.why
+			}
+			if _, err := runJSON(t, e.s, "lead1", "ask_escalate", args); err != nil {
+				t.Fatalf("ask_escalate(%q): %v", tc.why, err)
+			}
+			waitFor(t, "escalated ledger entry recorded", func() bool {
+				c := cardsToday(t, e.s)[tc.wantSrc]
+				if tc.held {
+					return c.Held == 1
+				}
+				return c.N == 1
+			})
+			got := cardsToday(t, e.s)
+			c := got[tc.wantSrc]
+			if tc.held {
+				if c.Category != tc.wantCat || c.N != 0 || c.Held != 1 {
+					t.Fatalf("held ledger[%s] = %+v, want cat=%d N=0 Held=1", tc.wantSrc, c, tc.wantCat)
+				}
+			} else {
+				if c.Category != tc.wantCat || c.N != 1 || c.Held != 0 {
+					t.Fatalf("ledger[%s] = %+v, want cat=%d N=1 Held=0", tc.wantSrc, c, tc.wantCat)
+				}
+			}
+			if tc.wantSrc != cardAskEscalated {
+				if legacy := got[cardAskEscalated]; legacy.N != 0 || legacy.Held != 0 {
+					t.Fatalf("why_owner=%q fell back to legacy ask_escalated: %+v", tc.why, legacy)
+				}
+			}
+
+			allow := true
+			if err := e.s.resolve(ix.ID, proto.Resolution{Allow: &allow}); err != nil {
+				t.Fatal(err)
+			}
+			answerOf(t, answered)
+			e.settle()
+		})
+	}
+
+	// Direct notifyInteractionAt production call also honors whyOwner.
+	s, _ := newQuietService(t)
+	for _, tc := range []struct {
+		id, why, wantSrc string
+		wantCat          int
+	}{
+		{"ix_direct_owner", whyOnlyOwnerKnow, cardAskEscalatedOwnerKnows, cardCatOwnerKnows},
+		{"ix_direct_outward", whyVisible, cardAskEscalatedOutward, cardCatOutward},
+		{"ix_direct_irrev", whyIrreversible, cardAskEscalatedIrreversible, cardCatIrreversible},
+	} {
+		s.notifyInteractionAt(proto.Interaction{ID: tc.id, MachineID: "mac", SessionID: "sess1", Kind: proto.IxPermission, ToolName: "Bash"}, "mac", false, assistantwire.LevelP0, "", tc.why)
+		waitFor(t, "direct notifyInteractionAt recorded "+tc.wantSrc, func() bool {
+			return cardsToday(t, s)[tc.wantSrc].N == 1
+		})
+		if c := cardsToday(t, s)[tc.wantSrc]; c.Category != tc.wantCat || c.N != 1 {
+			t.Errorf("direct notifyInteractionAt(%q) = %+v, want cat=%d N=1", tc.why, c, tc.wantCat)
+		}
+	}
+	if legacy := cardsToday(t, s)[cardAskEscalated]; legacy.N != 0 {
+		t.Errorf("direct notifyInteractionAt leaked into legacy ask_escalated: %+v", legacy)
+	}
+}

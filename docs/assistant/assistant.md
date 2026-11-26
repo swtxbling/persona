@@ -2198,21 +2198,40 @@ tier down after its own 20 settled acceptances, but never the smallest.
 
 The owner decides only six kinds of things (decision-rights design of 2026-11-23): 1 goals and direction, 2 what only
 they know, 3 what goes out under their name, 4 money, 5 what cannot be undone and they never said, 6 what only they can
-do in person (a login, a second factor, a password or form, the experience check). Every card or push the manager sends
-to the owner is recorded with its source, the kind of the six it is (0: none of the six) and its owner
-(`assistant/card_layers.go`). The source is a code constant named where the push is made (`withCard` on the ctx of
-`push`/`pushResult`/`ask`, `deliverCard`, or `inputCardSource` for a card: an Agent's by its kind, the manager's own by
-what `ask` was told or by its tool), and its kind comes from one table, `cardCategories`, never from a model: secret and
-form cards are 6; a connector's write left to the owner (mail, a chat message, a comment) is 3; a supervisor's
-`needs_user`, its decision, an explicit `ask_escalate` and what the owner set up themself (their reminders, water
-reminders, minutes, the day recap, the briefing fallback, finished-turn pushes) are 1; everything else, an Agent's
-approvals, plans and questions, `confirmOutbound`, the main conversation's own `persona_settings` cards and an untagged
-push included, is 0, and every push of kind 0 is a bug. A test holds every source constant to having a kind. Counts are
-kept per day of the owner's time zone in the setting `assistant.card_ledger` (eight days; in memory only without a
-database). Once a day, from the morning briefing's time (`acceptLoop`'s tick), the day before's count goes to the main
-conversation as a message kept without waking it (`keepRelayLater`, setting `assistant.card_ledger_told`): in all, each
-of the six kinds, and kind 0 by source. It is never pushed to the owner and the briefing does not carry it. The ledger
-only records; which cards are pushed is decided where they are made.
+do in person (a login, a second factor, a password or form, the experience check). Every push the manager sends is
+recorded only after `NotifyRequest` succeeds (`assistant/card_layers.go`): pushes delivered to the owner's phone
+(`!res.Held`, including older hubs that omit `Held`) increment the pushed count with their source, kind and owner; pushes
+held by hub push grading (`res.Held`) increment a separate `Held` counter instead of pushed totals or kind-0 bugs; failed
+or hub-refused pushes are recorded in neither. The source is a code constant named where the push is made (`withCard` on
+the ctx of `push`/`pushResult`/`ask`, `deliverCard`, `decisionCardSource` for `pushDecision`, or `inputCardSourceWithWhy`
+/ `inputCardSource` for a card: an Agent's by its kind or escalation `why_owner`, the manager's own by what `ask` was
+told or by its tool), and its kind comes from one table, `cardCategories`, never from a model:
+
+- 6 (`cardCatInPerson`): secret and form cards (`secret_form`, `agent_secret_form`);
+- 4 (`cardCatMoney`): planned tasks that spend money (`plan_money`);
+- 3 (`cardCatOutward`): connector writes left to the owner (`outbound_write`), planned outward tasks (`plan_outward`),
+  and `decision` / `ask_escalate` pushes with `why_owner` of `visible_to_others` (`decision_outward`,
+  `ask_escalated_outward`);
+- 5 (`cardCatIrreversible`): planned irreversible steps (`plan_irreversible`) and `decision` / `ask_escalate` pushes with
+  `why_owner` of `irreversible` (`decision_irreversible`, `ask_escalated_irreversible`);
+- 2 (`cardCatOwnerKnows`): `decision` / `ask_escalate` pushes with `why_owner` of `only_owner_knows`
+  (`decision_owner_knows`, `ask_escalated_owner_knows`);
+- 1 (`cardCatDirection`): `decision` / `ask_escalate` pushes with `why_owner` of `priority` or `acceptance`
+  (`decision_direction`, `ask_escalated_direction`), plus legacy `leader_needs_user`, `decision` and `ask_escalated`
+  sources kept for backward compatibility with stored history and untagged escalations;
+- 7 (`cardCatSubscribed`): owner-subscribed alerts and reminders (`todo_remind`, `health_water`, `page_alert`,
+  `minutes_ready`, `day_recap`, `brief_fallback`, `agent_done`) — neither one of the six decisions nor a platform defect;
+- 0 (`cardCatNone`): everything else (Agent approvals, plans and questions, `confirmOutbound`, the main conversation's
+  own `persona_settings` cards, `ask_held`, untagged pushes, etc.), where each push reaching the phone is a bug.
+
+A test holds every source constant to having a kind. Counts are kept per day of the owner's time zone in the setting
+`assistant.card_ledger` (eight days; in memory only without a database). Once a day, from the morning briefing's time
+(`acceptLoop`'s tick), the day before's count goes to the main conversation as a message kept without waking it
+(`keepRelayLater`, setting `assistant.card_ledger_told`): total pushed to the owner's phone, each of kinds 1–6,
+owner-subscribed alerts and reminders (kind 7), and kind 0 — with descending per-source breakdowns (`source×N`) for every
+non-zero category — plus an independent `Held by push grading (not pushed to phone)` line whenever any push was held. It
+is never pushed to the owner and the briefing does not carry it. The ledger only records; which cards are pushed is
+decided where they are made.
 
 ## Supervision by model (#5086)
 

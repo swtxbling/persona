@@ -2,11 +2,11 @@
 - 现在：{{.Now.Format "2006-01-02"}} 周{{if eq $w 0}}日{{else if eq $w 1}}一{{else if eq $w 2}}二{{else if eq $w 3}}三{{else if eq $w 4}}四{{else if eq $w 5}}五{{else}}六{{end}} {{.Now.Format "15:04"}}（{{.Zone}}）
 {{if .OpenTodosLoaded}}- 开放待办：共 {{.OpenTodosTotal}} 件（完整列表用 todo_list）
 {{end -}}
-- 模型档位：{{with .ModelProfile}}{{if .Unreadable}}unavailable (model_profiles_list to retry){{else if .Gone}}{{.ID}}，已被删除（没有 Agent 预设；model_profile_switch 换一个）{{else}}{{ctx (or .Name .ID)}} ({{.ID}}){{with .Tiers}}；Agent 预设（agent_start / task_plan 的 tier）：{{range $i, $t := .}}{{if $i}}；{{end}}{{$t.Name}} = {{ctx $t.Launcher}} · {{if $t.Model}}{{ctx $t.Model}}{{else}}默认模型{{end}}{{with $t.Effort}} · {{.}}{{end}}{{with $t.Speed}} · {{.}}{{end}}{{with $t.PermissionMode}} · {{.}}{{end}}{{with $t.More}}，另有 {{.}} 个候选{{end}}{{with $t.Aliases}}，旧名 {{range $j, $a := .}}{{if $j}}、{{end}}{{$a}}{{end}}{{end}}{{with $t.Description}}（{{ctx .}}）{{end}}{{end}}{{else}}；没有 Agent 预设{{end}}{{end}}{{else}}未设置（model_profiles_list 查看，model_profile_switch 切换）{{end}}
+- 模型档位：{{with .ModelProfile}}{{if .Unreadable}}unavailable (model_profiles_list to retry){{else if .Gone}}{{.ID}}，已被删除（没有 Agent 预设；model_profile_switch 换一个）{{else}}{{ctx (or .Name .ID)}} ({{.ID}}){{with .Tiers}}；Agent 预设 tier：{{range $i, $t := .}}{{if $i}}、{{end}}{{$t.Name}}{{end}}{{else}}；没有 Agent 预设{{end}}；详情用 model_profiles_list{{end}}{{else}}未设置（model_profiles_list 查看，model_profile_switch 切换）{{end}}
 - 在线的电脑：{{range $i, $m := .Up}}{{if $i}}、{{end}}{{$m.Name}}（{{$m.ID}}）{{end}}{{with .Down}}；离线：{{range $i, $m := .}}{{if $i}}、{{end}}{{$m.Name}}（{{$m.ID}}）{{end}}{{end}}
 - Agents：需要你 {{len .Needs}} 个，完成未看 {{len .Unread}} 个，工作中 {{len .Working}} 个（详情用 agents_list）
 {{with .Needs}}  - 需要你：{{template "assistant/snapshot_agents" .}}
-{{end}}{{with .Unread}}  - 完成未看：{{if $.Omit.Unread}}{{len .}} 个，{{template "assistant/snapshot_omitted" "agents_list"}}{{else}}{{template "assistant/snapshot_agents" .}}{{end}}
+{{end}}{{with .Unread}}  - 完成未看：{{len .}} 个，{{if $.Omit.Unread}}{{template "assistant/snapshot_omitted" "agents_list"}}{{else}}agents_list state=unread 查{{end}}
 {{end}}{{with .Awaiting}}  - 在问用户、用户看过还没回的（用户问有什么要处理时带上；别替用户回答）：{{template "assistant/snapshot_agents" .}}
 {{end}}{{with .Waiting}}  - 在等的（hub 到时会叫醒它们，不用管）：{{if $.Omit.Waiting}}{{len .}} 个，{{template "assistant/snapshot_omitted" "agents_list"}}{{else}}{{template "assistant/snapshot_agents" .}}{{end}}
 {{end}}{{with .Done}}  - 做完的（24 小时内）：{{len .}} 个，agents_list state=done 查
@@ -26,7 +26,7 @@
 {{else}}
 {{indent "  " .}}{{end}}{{end}}{{with .Chats}}{{if .Total}}- 飞书未读会话 {{.Total}} 个（免打扰的不算；用 lark_chats / lark_messages 看）
 {{with .AtMe}}  - @我：{{range $i, $c := first 6 .}}{{if $i}}；{{end}}{{$c.Name}}（{{$c.Unread}} 条）：{{$c.Preview}}{{end}}
-{{end}}{{with .Other}}  - 其他：{{if $.Omit.OtherChats}}{{len .}} 个会话，{{template "assistant/snapshot_omitted" "lark_chats"}}{{else}}{{range $i, $c := first 8 .}}{{if $i}}、{{end}}{{$c.Name}}（{{$c.Unread}} 条）{{end}}{{end}}
+{{end}}{{with .Other}}  - 其他：{{len .}} 个会话，{{if $.Omit.OtherChats}}{{template "assistant/snapshot_omitted" "lark_chats"}}{{else}}lark_chats 查{{end}}
 {{end}}{{else}}- 飞书：没有未读（免打扰的不算）
 {{end}}{{end}}{{with .Upcoming}}{{if .Events}}- 飞书日历今天还没结束的会（已经开完的不在这里）：{{range $i, $e := .Events}}{{if $i}}；{{end}}{{$e.Start.Format "15:04"}}–{{$e.End.Format "15:04"}} {{$e.Title}}{{end}}
 {{else}}- 飞书日历：今天接下来没有会了（已经开完的不在这里）

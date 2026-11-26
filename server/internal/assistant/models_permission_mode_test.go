@@ -163,8 +163,9 @@ func TestModelProfileAndTierPermissionMode(t *testing.T) {
 		t.Fatalf("snapshot tiers missing permission_mode: %+v", snap)
 	}
 	rendered := prompts.RenderSnapshot(prompts.Snapshot{ModelProfile: snap, Now: time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC), Zone: "UTC"})
-	if !strings.Contains(rendered, "review = claude · sonnet · plan（Read and review）") {
-		t.Fatalf("snapshot did not render tier permission_mode:\n%s", rendered)
+	want := "- 模型档位：Safe (safe)；Agent 预设 tier：review；详情用 model_profiles_list"
+	if !strings.Contains(rendered, want) {
+		t.Fatalf("snapshot did not keep the tier name while leaving permission_mode to model_profiles_list:\n%s", rendered)
 	}
 
 	// Rollback restores prior empty permission_mode.

@@ -342,7 +342,7 @@ func TestProfileEditTellsTheApps(t *testing.T) {
 	}
 }
 
-// The snapshot's model profile line lists the Agent presets with what each runs on and is for.
+// The snapshot's model profile line keeps only the active identity and tier names; model_profiles_list has the details.
 func TestGoldenAssistantSnapshotTiers(t *testing.T) {
 	golden(t, "assistant_snapshot.tiers", prompts.RenderSnapshot(prompts.Snapshot{Now: time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC), Zone: "UTC",
 		ModelProfile: &prompts.SnapshotProfile{ID: "performance", Name: "Performance", Tiers: []prompts.SnapshotTier{

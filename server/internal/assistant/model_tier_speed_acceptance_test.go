@@ -121,11 +121,12 @@ func TestSpeedInPresetRoutes11141(t *testing.T) {
 	}
 }
 
-func TestSpeedInSnapshotPresetLine11141(t *testing.T) {
+func TestSnapshotPresetLineKeepsOnlyTierNames11141(t *testing.T) {
 	s := newSpeedPresetService11141(t, "fast")
 	snapshot := s.contextSnapshot(context.Background(), "", false)
-	if !strings.Contains(snapshot, "deep") || !strings.Contains(snapshot, "fast") {
-		t.Fatalf("snapshot preset line omitted speed:\n%s", snapshot)
+	want := "- 模型档位：P (p)；Agent 预设 tier：deep、plain；详情用 model_profiles_list"
+	if !strings.Contains(snapshot, want) {
+		t.Fatalf("snapshot preset line does not keep just the active identity and tier names:\n%s", snapshot)
 	}
 }
 

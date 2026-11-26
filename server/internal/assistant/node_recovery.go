@@ -251,6 +251,10 @@ func (s *Service) nodeConnectedAt(ctx context.Context, machine string, now time.
 	// returning node are closed right away, preventing split-brain after failover.
 	s.historyWake()
 
+	// Trigger prompt restart auto-resume for any in-flight supervised tasks on this
+	// reconnecting node (covering both hub restarts and fast node service restarts).
+	s.onNodeReconnectedForRestartRecovery(ctx, id)
+
 	if !shouldSweep {
 		return nodeRecoveryResult{Rebooted: rebooted, Outage: outage}
 	}

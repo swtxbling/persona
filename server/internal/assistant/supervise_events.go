@@ -153,6 +153,9 @@ func (s *Service) superviseJudged(ctx context.Context, t Todo, work time.Time, c
 			return
 		}
 		s.logf("task %s: waits for review: %s", t.ID, detail)
+		if recErr := s.ClearTodoRecoveryCheckpoint(ctx, t.ID); recErr != nil {
+			s.logf("task %s: clear restart recovery checkpoint on pending_review: %v", t.ID, recErr)
+		}
 		s.signal(superviseSignal{Todo: t.ID, Kind: sigReview, Key: reviewKey(&v), Detail: detail})
 		return
 	}

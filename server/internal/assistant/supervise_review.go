@@ -882,10 +882,12 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 			s.evaluateTodoAfterDependents(ctx, id)
 			s.evaluateParentCloseoutForChild(ctx, id)
 		}
-		if s.settings(ctx).todosV2On() {
+		if s.settings(ctx).restartAutoResumeOn() {
 			if recErr := s.ResetSupervisedTaskRecovery(ctx, id); recErr != nil {
-				s.logf("task %s: reset todos_v2 restart recovery: %v", id, recErr)
+				s.logf("task %s: reset restart recovery: %v", id, recErr)
 			}
+		}
+		if s.settings(ctx).todosV2On() {
 			if accepted && row.DoneAt != nil {
 				if _, blkErr := s.ReconcileTodoBlockers(ctx, id); blkErr != nil {
 					s.logf("task %s: reconcile todos_v2 blockers: %v", id, blkErr)

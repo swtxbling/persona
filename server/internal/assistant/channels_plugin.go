@@ -208,6 +208,9 @@ func (s *Service) channelCommandInGeneration(ctx context.Context, id string, m c
 				reply(i18n.T(l, "assistant-channels_plugin.not_stopped", i18n.Args{"error": clip(oneLine(err.Error()), 200)}))
 				return true, ""
 			}
+			if recErr := s.ClearSupervisedTaskRecovery(ctx, rt.machine, rt.session.SessionID); recErr != nil {
+				s.logf("channel stop %s on %s: clear restart recovery checkpoint: %v", short(rt.session.SessionID), rt.machine, recErr)
+			}
 			c := &s.chans
 			c.mu.Lock()
 			if c.generation[id] != generation {

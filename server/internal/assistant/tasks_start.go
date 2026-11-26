@@ -1131,10 +1131,10 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		s.closeDeferredTaskStart(ctx, &t, mid, sid)
 	}
 	if err == nil {
-		if !linkedDone && s.settings(ctx).todosV2On() {
+		if !linkedDone && s.settings(ctx).restartAutoResumeOn() {
 			rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
 			if recErr := s.RecordSupervisedTaskActive(rctx, t.TodoID, mid, sid, s.runtimeBootEpoch()); recErr != nil {
-				s.logf("task %s: record todos_v2 active checkpoint: %v", t.TodoID, recErr)
+				s.logf("task %s: record restart recovery checkpoint: %v", t.TodoID, recErr)
 			}
 			rcancel()
 		}

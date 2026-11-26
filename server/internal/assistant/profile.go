@@ -129,6 +129,9 @@ type Settings struct {
 	// TodosV2FoldChildren controls whether non-urgent child tasks fold under their top-level parent goal in board
 	// projection under todos_v2=true (#16098). nil is true (the default).
 	TodosV2FoldChildren *bool `json:"todos_v2_fold_children,omitempty"`
+	// RestartAutoResume controls whether open supervised task Agents interrupted by a hub or node
+	// service restart are automatically resumed with bounded crash-loop protection. nil is true (the default).
+	RestartAutoResume *bool `json:"restart_auto_resume,omitempty"`
 	// IntegrationsV2 enables the unified experimental Integrations & Extensions experience (#14802, #14805). nil is off (the default).
 	IntegrationsV2 *bool `json:"integrations_v2,omitempty"`
 	// LabsSeen is the set of experiment IDs acknowledged on any client of this assistant.
@@ -398,6 +401,9 @@ var (
 func (v Settings) workGuideOn() bool      { return v.WorkGuide != nil && *v.WorkGuide }
 func (v Settings) todosV2On() bool        { return v.TodosV2 != nil && *v.TodosV2 }
 func (v Settings) integrationsV2On() bool { return v.IntegrationsV2 != nil && *v.IntegrationsV2 }
+func (v Settings) restartAutoResumeOn() bool {
+	return v.RestartAutoResume == nil || *v.RestartAutoResume
+}
 
 func (v Settings) todosV2AutoSeenMode() string {
 	if slices.Contains(todosV2AutoSeenModes, v.TodosV2AutoSeen) {
@@ -885,6 +891,7 @@ type assistantView struct {
 	TodosV2PendingReviewSLAHours int      `json:"todos_v2_pending_review_sla_hours"`
 	TodosV2CanWaitSLAHours       int      `json:"todos_v2_can_wait_sla_hours"`
 	TodosV2FoldChildren          bool     `json:"todos_v2_fold_children"`
+	RestartAutoResume            bool     `json:"restart_auto_resume"`
 	IntegrationsV2               bool     `json:"integrations_v2"`
 	LabsSeen                     []string `json:"labs_seen"`
 	// MeetingAttendanceDefault is in effect (off until changed).
@@ -965,6 +972,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		TodosV2PendingReviewSLAHours: v.todosV2PendingReviewSLAHours(),
 		TodosV2CanWaitSLAHours:       v.todosV2CanWaitSLAHours(),
 		TodosV2FoldChildren:          v.todosV2FoldChildrenOn(),
+		RestartAutoResume:            v.restartAutoResumeOn(),
 		IntegrationsV2:               v.integrationsV2On(),
 		LabsSeen:                     append([]string{}, v.LabsSeen...),
 		RecentTaskChats:              v.RecentTaskChats != nil && *v.RecentTaskChats,

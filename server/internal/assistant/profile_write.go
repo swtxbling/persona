@@ -71,6 +71,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	if (in.Permission != nil || in.WorkGuide != nil || in.TodosV2 != nil ||
 		in.TodosV2AutoSeen != "" || in.TodosV2PendingReviewSLAHours != nil ||
 		in.TodosV2CanWaitSLAHours != nil || in.TodosV2FoldChildren != nil ||
+		in.RestartAutoResume != nil ||
 		in.IntegrationsV2 != nil) && !s.explicitSettingsTarget(w, r) {
 		return
 	}
@@ -391,6 +392,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.TodosV2FoldChildren != nil {
 			v.TodosV2FoldChildren = in.TodosV2FoldChildren
+		}
+		if in.RestartAutoResume != nil {
+			v.RestartAutoResume = in.RestartAutoResume
 		}
 		if in.IntegrationsV2 != nil {
 			v.IntegrationsV2 = in.IntegrationsV2

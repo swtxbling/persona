@@ -124,6 +124,9 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 		if over {
 			return fmt.Sprintf(overSaid, agentLabel(c), am.Name), nil
 		}
+		if err := s.ClearSupervisedTaskRecovery(ctx, am.ID, c.SessionID); err != nil {
+			s.logf("agent_interrupt %s on %s: clear restart recovery checkpoint: %v", short(c.SessionID), am.ID, err)
+		}
 		if !stopped {
 			return fmt.Sprintf("Asked %s on %s to stop, but its turn has not ended yet: it still reads as working after %s. "+
 				"Do not tell the user it stopped; look again with agent_read before counting on it.", agentLabel(c), am.Name, interruptSettleWait), nil

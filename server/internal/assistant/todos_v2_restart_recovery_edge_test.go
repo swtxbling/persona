@@ -199,8 +199,9 @@ func TestTodosV2RestartRecoveryEdgeBypassWhenFlagOff(t *testing.T) {
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 	ctx := context.Background()
 
-	if s.settings(ctx).todosV2On() {
-		t.Fatal("expected todos_v2 default to be false")
+	setRestartAutoResumeSetting(t, s, false)
+	if s.settings(ctx).restartAutoResumeOn() {
+		t.Fatal("expected restart_auto_resume to be false")
 	}
 	f.mu.Lock()
 	f.devices = []Device{{ID: "mac", Name: "Mac", Online: true}}

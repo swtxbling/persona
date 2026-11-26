@@ -562,10 +562,12 @@ func (s *Service) toolTodoDone(ctx context.Context, machine, self, name string, 
 	if err != nil {
 		return "", fmt.Errorf("the change could not be saved, nothing changed: %w", err)
 	}
-	if complete && s.settings(ctx).todosV2On() {
+	if complete && s.settings(ctx).restartAutoResumeOn() {
 		if recErr := s.ResetSupervisedTaskRecovery(ctx, t.ID); recErr != nil {
-			s.logf("todo %s: reset todos_v2 restart recovery: %v", t.ID, recErr)
+			s.logf("todo %s: reset restart recovery: %v", t.ID, recErr)
 		}
+	}
+	if complete && s.settings(ctx).todosV2On() {
 		if _, blkErr := s.ReconcileTodoBlockers(ctx, t.ID); blkErr != nil {
 			s.logf("todo %s: reconcile todos_v2 blockers: %v", t.ID, blkErr)
 		}

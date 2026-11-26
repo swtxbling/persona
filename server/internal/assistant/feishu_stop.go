@@ -101,5 +101,8 @@ func (s *Service) interruptBotConversation(ctx context.Context, rt resolvedTarge
 	if err := s.call(ctx, rt.machine, "session.interrupt", map[string]any{"session_id": rt.session.SessionID}, nil); err != nil {
 		return stopOutcome{kind: "error", message: i18n.T(l, "assistant-feishu_cards.not_stopped", i18n.Args{"error": clip(oneLine(err.Error()), 200)})}
 	}
+	if err := s.ClearSupervisedTaskRecovery(ctx, rt.machine, rt.session.SessionID); err != nil {
+		s.logf("channel stop %s on %s: clear restart recovery checkpoint: %v", short(rt.session.SessionID), rt.machine, err)
+	}
 	return stopOutcome{kind: "success", message: i18n.T(l, "assistant-feishu_cards.stopped", i18n.Args{"label": rt.label})}
 }

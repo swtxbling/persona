@@ -737,6 +737,7 @@ func parseRange(path string, from, to int64, n int, m *Meta) error {
 		if len(line) > 0 && line[len(line)-1] == '\n' {
 			if body := line[:len(line)-1]; len(bytes.TrimSpace(body)) > 0 {
 				ParseLine(n, body, m)
+				m.tree = treeLine{} // File.fullMeta never replays raw lines; do not retain the last line slice on File.meta
 			}
 			n++
 		}

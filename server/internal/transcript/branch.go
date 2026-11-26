@@ -60,8 +60,15 @@ type treeLine struct {
 }
 
 // treeRec is a line with a uuid, as the tree keeps it: prompt says it is one of the user's own messages, reply that it
-// is the assistant's, system that it is a system line and turnEnd a turn_duration one. raw is the parsed record to
-// replay when it remains visible; hasOutcome is false for a structural-only skipped tool result or compact summary.
+// is the assistant's, system that it is a system line and turnEnd a turn_duration one.
+//
+// Ownership of raw differs by reader:
+//   - Tail (Tail.Line / Tail.Skipped) is short-lived over a bounded quick tail and keeps raw on treeRec so Tail.Settle
+//     can replay visible records when an abandoned branch is settled; hasOutcome is false for a structural-only skipped
+//     tool result or compact summary.
+//   - File (trackLine / ensureColdInputStructure) keeps branchTree.recs for the File's lifetime in node caches and
+//     never replays raw lines, so it clears raw to avoid pinning whole Refresh or windowBytes read buffers.
+//
 // round: it is a supervision message sent as a round of the background supervisor (prompts.IsSuperviseRound, #7315).
 type treeRec struct {
 	uuid, parent string
@@ -321,15 +328,22 @@ func setOf(uuids []string) map[string]bool {
 	return m
 }
 
-// trackLine puts a line just parsed into the tree. drop says it is on an abandoned branch: its items must not be
-// kept. When it abandons an earlier branch, that branch's items are taken out of *kept and *sent (either may be nil).
+// trackLine puts a line just parsed into a File's long-lived branchTree (used only by File.refresh and File.parseLines).
+// drop says it is on an abandoned branch: its items must not be kept. When it abandons an earlier branch, that branch's
+// items are taken out of *kept and *sent (either may be nil).
+//
+// Unlike Tail.Line (which keeps rec.raw on its short-lived Tail so Tail.Settle can replay visible records), File only
+// uses branchTree.recs for branch topology and never replays raw lines. Clearing rec.raw here releases the Refresh or
+// windowBytes backing buffer that ParseLine's line slice aliases.
 func trackLine(t *branchTree, meta *Meta, items []proto.Item, kept, sent *[]proto.Item) (drop bool) {
 	tl := meta.tree
 	meta.tree = treeLine{}
 	if tl.uuid == "" || tl.sidechain || meta.Sidechain || meta.Codex {
 		return false
 	}
-	drop, newly := t.add(tl.rec(items))
+	rec := tl.rec(items)
+	rec.raw = nil
+	drop, newly := t.add(rec)
 	if len(newly) > 0 {
 		gone := setOf(newly)
 		if kept != nil {

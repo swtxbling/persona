@@ -27,7 +27,7 @@ import type { TermSpace } from "../lib/terminals";
 import { useFolded } from "../lib/use-folded";
 import { stateCount, type WaitReason } from "../lib/state-labels";
 import { neverConnected } from "../lib/add-computer";
-import { type GoFn, GroupCount, holdsRow, type NodeMenuFn, type RegFn, rowKey, ROW_TITLE_MIN, type RowMenuFn, Section, SidebarGroup } from "./SidebarParts";
+import { type GoFn, GroupCount, holdsRow, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup } from "./SidebarParts";
 import { NavRow, SessionRow } from "./SidebarRows";
 import { WindowedRows } from "./WindowedRows";
 import { workspacePinTime, type WorkspaceTarget } from "../lib/workspace-catalog";
@@ -122,7 +122,7 @@ function BranchEnd({ n, state, label }: { n: number; state?: TreeState; label?: 
  */
 export function TreeBranch({ branch, top, folded, onToggle, toggleLabel, icon, title, info, end, empty, children }: { branch: string; top?: boolean; folded: boolean; /** None: nothing to unfold, the title stays in the column. */ onToggle?: () => void; toggleLabel: string; icon?: IconName; title: React.ReactNode; info?: React.ReactNode; end: React.ReactNode; empty?: string; children?: React.ReactNode }) {
   const row = (
-    <div data-tree-branch-row className="relative z-10 flex w-full min-w-0 select-none items-center gap-1.5 rounded-control py-1 pl-2 pr-2 text-label text-ink-2 hover:bg-hover [@media(pointer:coarse)]:min-h-11">
+    <div data-tree-branch-row className="@container relative z-10 flex w-full min-w-0 select-none items-center gap-1.5 rounded-control py-1 pl-2 pr-2 text-label text-ink-2 hover:bg-hover [@media(pointer:coarse)]:min-h-11">
       {onToggle ? (
         <button type="button" aria-expanded={!folded} aria-label={toggleLabel} onClick={onToggle} className="touch-hit flex shrink-0 items-center [@media(pointer:coarse)]:static">
           <BranchChevron folded={folded} />
@@ -207,9 +207,9 @@ export const TreeTodoRows = memo(function TreeTodoRows({ td, top, ...p }: { td: 
   // the link takes the touch row's height (touch-hit; the words truncate inside it, which would clip its square), so a
   // finger just off the words opens the to-do rather than folding it
   const title = td.todoId ? (
-    <a href={href({ name: "todos", id: td.todoId })} onClick={(e) => { e.preventDefault(); openTodoFromTag(td.todoId!, navigate, p.onNavigate); }} className={`touch-hit ${ROW_TITLE_MIN} flex-1 basis-auto font-medium text-ink hover:underline`}><span className="block truncate">{td.name}</span></a>
+    <a href={href({ name: "todos", id: td.todoId })} onClick={(e) => { e.preventDefault(); openTodoFromTag(td.todoId!, navigate, p.onNavigate); }} className="touch-hit min-w-0 @min-[10rem]:min-w-(--row-title-min) flex-1 basis-auto font-medium text-ink hover:underline"><span className="block truncate">{td.name}</span></a>
   ) : (
-    <button type="button" onClick={toggle} className={`${ROW_TITLE_MIN} flex-1 basis-auto truncate text-left`}>{td.name}</button>
+    <button type="button" onClick={toggle} className="min-w-0 @min-[10rem]:min-w-(--row-title-min) flex-1 basis-auto truncate text-left">{td.name}</button>
   );
   const state = td.taskState ? (
     <DirectionStateText state={td.taskState} />
@@ -376,7 +376,7 @@ function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }:
           </span>
         ) : null}
         <SpaceMarks pinned={workspacePinTime(w.workspace) !== undefined} muted={false} />
-        <button type="button" title={title} aria-pressed={selected === w.key} aria-expanded={!folded} onClick={() => { if (w.target) actions.onSelectWorkspace?.(w.target); toggle(); }} className={`flex min-h-7 ${ROW_TITLE_MIN} flex-1 basis-auto items-center gap-1.5 text-left hover:text-ink [@media(pointer:coarse)]:min-h-11`}>{label}</button>
+        <button type="button" title={title} aria-pressed={selected === w.key} aria-expanded={!folded} onClick={() => { if (w.target) actions.onSelectWorkspace?.(w.target); toggle(); }} className="flex min-h-7 min-w-0 @min-[10.5rem]:min-w-(--row-title-min) flex-1 basis-auto items-center gap-1.5 text-left hover:text-ink [@media(pointer:coarse)]:min-h-11">{label}</button>
         {w.workspace?.available === false && <Icon name="warning" size={11} className="shrink-0 text-ink-3" aria-label={t("workspace-tree.unavailable")} />}
         <span className="ml-auto min-w-0 shrink-[20] truncate text-[10.5px] text-ink-3 tabular-nums">{running > 0 ? t("sidebar.worktree_agents", { count: w.sessions.length }) : t("sidebar.idle")}</span>
         {w.target && actions.onWorkspaceMenu && <button type="button" data-row-menu aria-label={t("workspace-tree.actions", { name: w.name })} aria-haspopup="menu" onClick={(e) => actions.onWorkspaceMenu!(w.target!, e.currentTarget)} className="touch-hit relative flex size-5 shrink-0 items-center justify-center rounded-control text-ink-3 hover:bg-hover-2 focus-visible:text-ink [@media(hover:none)]:size-8"><Icon name="more" size={12} /></button>}

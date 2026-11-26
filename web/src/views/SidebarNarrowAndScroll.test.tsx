@@ -102,8 +102,10 @@ describe("narrow-sidebar (190px-220px) readability", () => {
 
     const link = host.querySelector<HTMLAnchorElement>('a[href*="/todos"]');
     expect(link).not.toBeNull();
-    expect(link!.className).toContain(ROW_TITLE_MIN);
+    expect(link!.className).toContain("min-w-0");
+    expect(link!.className).toContain(`@min-[10rem]:${ROW_TITLE_MIN}`);
     expect(link!.className).toContain("basis-auto");
+    expect(link!.closest("[data-tree-branch-row]")?.className).toContain("@container");
 
     const stateEl = host.querySelector<HTMLElement>('[data-task-state="needs_you"]');
     expect(stateEl).not.toBeNull();
@@ -169,8 +171,10 @@ describe("narrow-sidebar (190px-220px) readability", () => {
     const buttons = [...host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")];
     const dirBtn = buttons.find((b) => b.textContent?.includes("Persona Core Startup & Sidebar Architecture"));
     expect(dirBtn).not.toBeNull();
-    expect(dirBtn!.className).toContain(ROW_TITLE_MIN);
+    expect(dirBtn!.className).toContain("min-w-0");
+    expect(dirBtn!.className).toContain(`@min-[10rem]:${ROW_TITLE_MIN}`);
     expect(dirBtn!.className).toContain("basis-auto");
+    expect(dirBtn!.parentElement?.className).toContain("@container");
 
     const counts = host.querySelector<HTMLElement>("[data-direction-counts]");
     expect(counts).not.toBeNull();
@@ -283,7 +287,9 @@ describe("narrow-sidebar (190px-220px) readability", () => {
       (btn) => btn.textContent?.includes("perf-lazy-dialogs-feature"),
     );
     expect(titleBtn).not.toBeNull();
-    expect(titleBtn!.className).toContain(ROW_TITLE_MIN);
+    expect(titleBtn!.className).toContain("min-w-0");
+    expect(titleBtn!.className).toContain(`@min-[10.5rem]:${ROW_TITLE_MIN}`);
+    expect(titleBtn!.className).not.toMatch(/(^|\s)min-w-\(--row-title-min\)(\s|$)/);
     expect(titleBtn!.className).toContain("basis-auto");
 
     const rowDiv = titleBtn!.parentElement!;
@@ -299,6 +305,91 @@ describe("narrow-sidebar (190px-220px) readability", () => {
     expect(trailingCount!.className).toContain("min-w-0");
     expect(trailingCount!.className).toContain("shrink-[20]");
     expect(trailingCount!.className).toContain("truncate");
+  });
+
+  it("relaxes nested RepoWorktreeRows titles via container queries across depths 0..5 so trailing menus never overflow (B5)", () => {
+    const machine: Machine = { id: "m1", name: "Laptop", online: true, last_seen: "2026-11-20T10:00:00Z" };
+    const s = makeSession("s1");
+    const makeNested = (depth: number, maxDepth: number): RepoMachine["repos"][number]["worktrees"][number] => ({
+      key: `wt:depth-${depth}`,
+      name: `nested-worktree-level-${depth}`,
+      path: `/code/persona/wt-${depth}`,
+      main: false,
+      sessions: [s],
+      tree: [s],
+      target: {
+        owner: "user",
+        manager: "assistant",
+        label: `nested-worktree-level-${depth}`,
+        host: "herdr",
+        cwd: `/code/persona/wt-${depth}`,
+        machine_id: "m1",
+        workspace_id: `ws-${depth}`,
+      } as unknown as RepoMachine["repos"][number]["worktrees"][number]["target"],
+      children: depth < maxDepth ? [makeNested(depth + 1, maxDepth)] : [],
+      childStates: { needs_you: 0, working: depth < maxDepth ? 1 : 0, done: 0 },
+    });
+
+    const repoMachine: RepoMachine = {
+      key: "m1",
+      foldKey: "repo-m1-deep",
+      machine,
+      needs: 0,
+      sessions: [s],
+      repos: [
+        {
+          key: "repo:m1/persona-deep",
+          machineId: "m1",
+          repo: "/code/persona",
+          name: "persona",
+          count: 6,
+          worktrees: [
+            {
+              key: "wt:main-deep",
+              name: "main",
+              path: "/code/persona",
+              main: true,
+              sessions: [],
+              tree: [],
+              children: [],
+              childStates: { needs_you: 0, working: 0, done: 0 },
+            },
+            makeNested(0, 5),
+          ],
+        },
+      ],
+    };
+
+    act(() =>
+      root.render(
+        <div style={{ width: 190 }}>
+          <RepoMachineSection
+            m={repoMachine}
+            flat
+            machines={[machine]}
+            reg={reg}
+            hover={hover}
+            activeKey=""
+            go={go}
+            onRowMenu={onRowMenu}
+            onWorkspaceMenu={() => {}}
+          />
+        </div>,
+      ),
+    );
+
+    for (let depth = 0; depth <= 5; depth++) {
+      const btn = [...host.querySelectorAll<HTMLButtonElement>("button")].find(
+        (b) => b.textContent?.includes(`nested-worktree-level-${depth}`),
+      );
+      expect(btn, `depth ${depth} title button`).not.toBeNull();
+      expect(btn!.className).toContain("min-w-0");
+      expect(btn!.className).toContain(`@min-[10.5rem]:${ROW_TITLE_MIN}`);
+      expect(btn!.className).not.toMatch(/(^|\s)min-w-\(--row-title-min\)(\s|$)/);
+      const row = btn!.parentElement!;
+      expect(row.className).toContain("@container");
+      expect(row.querySelector("[data-row-menu]")).not.toBeNull();
+    }
   });
 });
 

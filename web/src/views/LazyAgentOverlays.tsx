@@ -1,7 +1,7 @@
 // On-demand lazy wrappers for heavy click- and command-triggered sidebar/overview dialogs and context menus:
 // MarkSeenDialog, AgentRowMenu, SpaceMenu, NodeMenu, and NodePrompt. None of them load on the first screen or at idle.
-// Each wrapper isolates chunk failures via OverlayBoundary, resets open state cleanly for retry, and fences callbacks
-// against close-before-resolve and rapid target-switch (ABA) races.
+// Each wrapper isolates chunk failures via OverlayBoundary, resets open state cleanly for retry, cancels pending loads
+// on Escape/outside-pointer dismissal, and fences stale callbacks against close-before-resolve and target-switch races.
 import { memo, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ComponentType } from "react";
 import { lazyPage } from "../lib/lazy-page";
 import { answerAsk, getAsk, subscribeAsk } from "../lib/node-ask";
@@ -70,6 +70,19 @@ export function createLazyMarkSeenDialog(load: () => Promise<ComponentType<MarkS
       // eslint-disable-next-line react-hooks/exhaustive-deps -- capturedGen is the fence for this open generation
     }, [capturedGen]);
 
+    // While the dialog chunk is still loading, Escape cancels the pending open immediately.
+    useEffect(() => {
+      if (!open || openedAndLoaded) return;
+      const onKeyDown = (e: KeyboardEvent) => {
+        if (e.key !== "Escape" || e.isComposing || e.keyCode === 229) return;
+        e.preventDefault();
+        e.stopPropagation();
+        fencedClose();
+      };
+      addEventListener("keydown", onKeyDown, true);
+      return () => removeEventListener("keydown", onKeyDown, true);
+    }, [open, openedAndLoaded, fencedClose]);
+
     const [boundaryKey, setBoundaryKey] = useState(0);
     const [lastOpenTarget, setLastOpenTarget] = useState(targetKey);
     let activeBoundaryKey = boundaryKey;
@@ -81,9 +94,17 @@ export function createLazyMarkSeenDialog(load: () => Promise<ComponentType<MarkS
       setLastOpenTarget(targetKey);
     }
 
+    // Boundary error cleanup runs during React's commit phase before ancestor layout effects publish the new
+    // generation. Because OverlayBoundary is keyed by activeBoundaryKey (so stale boundaries unmount before the new
+    // target commits), guarding on `open` lets current-target crashes close cleanly while LoadedDialog keeps the
+    // generation-fenced callbacks against stale async interactions.
+    const onBoundaryError = () => {
+      if (open) props.onClose();
+    };
+
     if (!mounted) return null;
     return (
-      <OverlayBoundary key={activeBoundaryKey} open={open} onClose={fencedClose}>
+      <OverlayBoundary key={activeBoundaryKey} open={open} onClose={onBoundaryError}>
         <Suspense fallback={null}>
           <LoadedDialog
             {...props}
@@ -97,8 +118,8 @@ export function createLazyMarkSeenDialog(load: () => Promise<ComponentType<MarkS
   });
 }
 
-/** Factory for a conditionally-mounted lazy overlay menu with error-boundary recovery and ABA target fencing. */
-export function createLazyMenuOverlay<P extends { onClose: () => void }>(
+/** Factory for a conditionally-mounted lazy overlay menu with error-boundary recovery, pending dismissal, and ABA fencing. */
+export function createLazyMenuOverlay<P extends { onClose: () => void; anchor?: HTMLElement | null }>(
   load: () => Promise<ComponentType<P>>,
   targetKeyOf: (props: P) => string,
   onOpenEffect?: (props: P) => void,
@@ -117,12 +138,25 @@ export function createLazyMenuOverlay<P extends { onClose: () => void }>(
     const activeGenRef = useRef(gen);
     const onCloseRef = useRef(props.onClose);
     useLayoutEffect(() => {
-      activeGenRef.current = gen;
       onCloseRef.current = props.onClose;
+    });
+    useLayoutEffect(() => {
+      activeGenRef.current = gen;
       return () => {
         if (activeGenRef.current === gen) activeGenRef.current = 0;
       };
-    }, [gen, props.onClose]);
+    }, [gen]);
+
+    const [loaded, setLoaded] = useState(() => LoadedMenu.ready());
+    if (!loaded && LoadedMenu.ready()) setLoaded(true);
+    useEffect(() => {
+      if (loaded) return;
+      let live = true;
+      void LoadedMenu.preload().then(() => {
+        if (live) setLoaded(true);
+      }, () => {});
+      return () => { live = false; };
+    }, [loaded]);
 
     useEffect(() => {
       onOpenEffect?.(props);
@@ -134,8 +168,36 @@ export function createLazyMenuOverlay<P extends { onClose: () => void }>(
       if (activeGenRef.current === capturedGen) onCloseRef.current();
     }, [capturedGen]);
 
+    // While the menu chunk is still in flight, Menu has not mounted its dismissal listeners yet. Listen for Escape and
+    // outside pointerdown (ignoring the anchor, matching Menu in ui/atoms.tsx) until the chunk resolves so user
+    // dismissal cancels the pending open immediately instead of popping up late.
+    const anchor = props.anchor;
+    useEffect(() => {
+      if (loaded) return;
+      const onKeyDown = (e: KeyboardEvent) => {
+        if (e.key !== "Escape" || e.isComposing || e.keyCode === 229) return;
+        e.preventDefault();
+        e.stopPropagation();
+        fencedClose();
+      };
+      const onPointerDown = (e: Event) => {
+        const target = e.target;
+        if (target instanceof Node && anchor?.contains(target)) return;
+        fencedClose();
+      };
+      addEventListener("keydown", onKeyDown, true);
+      addEventListener("pointerdown", onPointerDown);
+      return () => {
+        removeEventListener("keydown", onKeyDown, true);
+        removeEventListener("pointerdown", onPointerDown);
+      };
+    }, [loaded, anchor, fencedClose]);
+
+    // OverlayBoundary is keyed by capturedGen, so an older target's boundary unmounts before the new target commits.
+    // Pass props.onClose directly so a synchronous render crash during a target switch closes cleanly even though
+    // componentDidCatch runs before the ancestor layout effect publishes activeGenRef.current = gen.
     return (
-      <OverlayBoundary key={capturedGen} open onClose={fencedClose}>
+      <OverlayBoundary key={capturedGen} open onClose={props.onClose}>
         <Suspense fallback={null}>
           <LoadedMenu {...props} onClose={fencedClose} />
         </Suspense>

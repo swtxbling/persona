@@ -209,6 +209,118 @@ describe("LazyMarkSeenDialog", () => {
     act(() => activeCloseB());
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it("closes immediately on Escape while the dialog chunk is still loading", async () => {
+    const gate = deferred<ComponentType<MarkSeenDialogProps>>();
+    const LazyDialog = createLazyMarkSeenDialog(() => gate.promise);
+    const onClose = vi.fn();
+
+    function Host() {
+      const [list, setList] = useState<Session[] | null>([session("s1", "PendingEsc")]);
+      return (
+        <div>
+          <span data-state>{list ? "open" : "closed"}</span>
+          <LazyDialog
+            list={list}
+            onClose={() => {
+              onClose();
+              setList(null);
+            }}
+          />
+        </div>
+      );
+    }
+
+    await act(async () => {
+      root.render(<Host />);
+    });
+    await flush();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(host.querySelector("[data-state]")?.textContent).toBe("closed");
+
+    await act(async () => {
+      gate.resolve(({ list }) => (list ? <div data-testid="late-dialog">late</div> : null));
+      await gate.promise;
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="late-dialog"]')).toBeNull();
+  });
+
+  it("closes cleanly when switching from rendered target A to throwing target B and on initial synchronous throw (B4)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const capturedClosers: Array<() => void> = [];
+    const Stub: ComponentType<MarkSeenDialogProps> = ({ list, onClose }) => {
+      if (list?.[0]?.session_id === "throw-b") {
+        throw new Error("synchronous render crash on B");
+      }
+      if (list) capturedClosers.push(onClose);
+      return list ? <div data-testid="mark-seen">{list[0]?.title}</div> : null;
+    };
+    const LazyDialog = createLazyMarkSeenDialog(async () => Stub);
+
+    // 1. Initial open throws synchronously -> onClose called immediately (1 time).
+    const initialClose = vi.fn();
+    await act(async () => {
+      root.render(<LazyDialog list={[session("throw-b", "BoomInitial")]} onClose={initialClose} />);
+    });
+    await flush();
+    expect(initialClose).toHaveBeenCalledTimes(1);
+
+    // 2. Target A renders -> switch directly to throwing target B -> onClose called immediately,
+    //    parent closes cleanly, stale callback from A stays fenced, and reopening A recovers cleanly.
+    const onClose = vi.fn();
+    function Host() {
+      const [list, setList] = useState<Session[] | null>([session("a", "TargetA")]);
+      return (
+        <div>
+          <button type="button" data-open-a onClick={() => setList([session("a", "TargetA")])}>openA</button>
+          <button type="button" data-switch-b onClick={() => setList([session("throw-b", "TargetB")])}>switchB</button>
+          <span data-state>{list ? list[0]!.session_id : "closed"}</span>
+          <LazyDialog
+            list={list}
+            onClose={() => {
+              onClose();
+              setList(null);
+            }}
+          />
+        </div>
+      );
+    }
+
+    await act(async () => {
+      root.render(<Host />);
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="mark-seen"]')?.textContent).toBe("TargetA");
+    const staleCloseFromA = capturedClosers[capturedClosers.length - 1]!;
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-switch-b]")!.click();
+    });
+    await flush();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(host.querySelector("[data-state]")?.textContent).toBe("closed");
+
+    // Reopen A after error -> recovers cleanly, while stale closer from earlier A remains fenced out.
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-open-a]")!.click();
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="mark-seen"]')?.textContent).toBe("TargetA");
+
+    await act(async () => {
+      staleCloseFromA();
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(host.querySelector("[data-state]")?.textContent).toBe("a");
+  });
 });
 
 describe("createLazyMenuOverlay", () => {
@@ -287,6 +399,190 @@ describe("createLazyMenuOverlay", () => {
     await flush();
     expect(host.querySelector("[data-state]")?.textContent).toBe("closed");
   });
+
+  it("dismisses pending menu on Escape before the chunk resolves and prevents late popup (B3)", async () => {
+    const gate = deferred<ComponentType<MenuProps>>();
+    const LazyMenu = createLazyMenuOverlay<MenuProps>(() => gate.promise, (p) => p.id);
+    const onClose = vi.fn();
+
+    function Host() {
+      const [menu, setMenu] = useState<{ id: string; label: string } | null>({ id: "a", label: "PendingEsc" });
+      return (
+        <div>
+          <span data-state>{menu ? menu.id : "closed"}</span>
+          {menu && (
+            <LazyMenu
+              id={menu.id}
+              label={menu.label}
+              onClose={() => {
+                onClose();
+                setMenu(null);
+              }}
+            />
+          )}
+        </div>
+      );
+    }
+
+    await act(async () => {
+      root.render(<Host />);
+    });
+    await flush();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(host.querySelector("[data-state]")?.textContent).toBe("closed");
+
+    await act(async () => {
+      gate.resolve(({ label }) => <div data-testid="late-menu">{label}</div>);
+      await gate.promise;
+    });
+    await flush();
+
+    expect(host.querySelector('[data-testid="late-menu"]')).toBeNull();
+  });
+
+  it("dismisses pending menu on outside pointerdown while ignoring pointerdown inside anchor (B3)", async () => {
+    type AnchoredMenuProps = MenuProps & { anchor: HTMLElement };
+    const gate = deferred<ComponentType<AnchoredMenuProps>>();
+    const LazyMenu = createLazyMenuOverlay<AnchoredMenuProps>(() => gate.promise, (p) => p.id);
+    const onClose = vi.fn();
+
+    const anchorEl = document.createElement("button");
+    anchorEl.textContent = "anchor";
+    const outsideEl = document.createElement("div");
+    outsideEl.textContent = "composer";
+    document.body.append(anchorEl, outsideEl);
+
+    try {
+      function Host() {
+        const [menu, setMenu] = useState<{ id: string; label: string } | null>({ id: "a", label: "PendingOutside" });
+        return (
+          <div>
+            <span data-state>{menu ? menu.id : "closed"}</span>
+            {menu && (
+              <LazyMenu
+                id={menu.id}
+                label={menu.label}
+                anchor={anchorEl}
+                onClose={() => {
+                  onClose();
+                  setMenu(null);
+                }}
+              />
+            )}
+          </div>
+        );
+      }
+
+      await act(async () => {
+        root.render(<Host />);
+      });
+      await flush();
+
+      // Pointerdown inside anchor must NOT dismiss pending open.
+      await act(async () => {
+        anchorEl.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      });
+      await flush();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(host.querySelector("[data-state]")?.textContent).toBe("a");
+
+      // Outside pointerdown dismisses pending open immediately.
+      await act(async () => {
+        outsideEl.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      });
+      await flush();
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(host.querySelector("[data-state]")?.textContent).toBe("closed");
+
+      // Resolving chunk afterwards must not render any menu.
+      await act(async () => {
+        gate.resolve(({ label }) => <div data-testid="late-menu-outside">{label}</div>);
+        await gate.promise;
+      });
+      await flush();
+      expect(host.querySelector('[data-testid="late-menu-outside"]')).toBeNull();
+    } finally {
+      anchorEl.remove();
+      outsideEl.remove();
+    }
+  });
+
+  it("closes immediately when switching from target A to throwing target B and on initial throw while fencing stale A callbacks (B4)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const closers: Array<() => void> = [];
+    const Stub: ComponentType<MenuProps> = ({ id, label, onClose }) => {
+      if (id === "throw-b") {
+        throw new Error("synchronous render crash on B");
+      }
+      closers.push(onClose);
+      return <div data-testid="lazy-menu">{label}</div>;
+    };
+    const LazyMenu = createLazyMenuOverlay<MenuProps>(async () => Stub, (p) => p.id);
+
+    // 1. Initial open throws synchronously -> onClose fires immediately.
+    const initialClose = vi.fn();
+    await act(async () => {
+      root.render(<LazyMenu id="throw-b" label="BoomInitial" onClose={initialClose} />);
+    });
+    await flush();
+    expect(initialClose).toHaveBeenCalledTimes(1);
+
+    // 2. Target A renders -> switch directly to throwing target B -> onClose fires immediately (1 time).
+    const onClose = vi.fn();
+    function Host() {
+      const [menu, setMenu] = useState<{ id: string; label: string } | null>({ id: "a", label: "MenuA" });
+      return (
+        <div>
+          <button type="button" data-open-a onClick={() => setMenu({ id: "a", label: "MenuA" })}>openA</button>
+          <button type="button" data-switch-b onClick={() => setMenu({ id: "throw-b", label: "MenuB" })}>switchB</button>
+          <span data-state>{menu ? menu.id : "closed"}</span>
+          {menu && (
+            <LazyMenu
+              id={menu.id}
+              label={menu.label}
+              onClose={() => {
+                onClose();
+                setMenu(null);
+              }}
+            />
+          )}
+        </div>
+      );
+    }
+
+    await act(async () => {
+      root.render(<Host />);
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="lazy-menu"]')?.textContent).toBe("MenuA");
+    const staleCloserA = closers[closers.length - 1]!;
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-switch-b]")!.click();
+    });
+    await flush();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(host.querySelector("[data-state]")?.textContent).toBe("closed");
+
+    // 3. Reopen A after error recovers cleanly, and stale callback from earlier A remains fenced out.
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-open-a]")!.click();
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="lazy-menu"]')?.textContent).toBe("MenuA");
+
+    await act(async () => {
+      staleCloserA();
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(host.querySelector("[data-state]")?.textContent).toBe("a");
+  });
 });
 
 describe("createLazyNodePrompt", () => {
@@ -336,5 +632,36 @@ describe("createLazyNodePrompt", () => {
       answerAsk();
     });
     await expect(secondPromise).resolves.toBe(false);
+  });
+
+  it("cancels throwing ask B cleanly when switching from rendered ask A (B4)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const LazyPrompt = createLazyNodePrompt(async () => {
+      return function PromptStub() {
+        const current = getAsk();
+        if (current?.title === "ThrowB") throw new Error("render crash on ask B");
+        return current ? <div data-testid="node-prompt">{current.title}</div> : null;
+      };
+    });
+
+    await act(async () => {
+      root.render(<div data-testid="prompt-host"><LazyPrompt /></div>);
+    });
+    await flush();
+
+    await act(async () => {
+      void askText("AskA", "Name", "a");
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="node-prompt"]')?.textContent).toBe("AskA");
+
+    let askBPromise!: Promise<boolean>;
+    await act(async () => {
+      askBPromise = askConfirm("ThrowB", "Trigger crash", "Confirm");
+    });
+    await flush();
+
+    await expect(askBPromise).resolves.toBe(false);
+    expect(getAsk()).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 // Overlays a first screen does not draw (the command palette, New agent, dialogs and popovers opened by a click): their chunks load in
 // the idle preload (lib/lazy-page.ts) or on the first open, and each mounts then and stays mounted for its exit.
-import { Component, Suspense, type ComponentType, type ErrorInfo, type ReactNode, useState } from "react";
+import { Component, Fragment, Suspense, type ComponentType, type ErrorInfo, type ReactNode, useState } from "react";
+import { t } from "../i18n";
 import { reportBoundary } from "../lib/error-reports";
 import { lazyPage } from "../lib/lazy-page";
 import { isChunkError } from "./PageBoundary";
@@ -38,6 +39,65 @@ export class OverlayBoundary extends Component<{ open: boolean; onClose: () => v
 
   render() {
     return this.state.failed ? (this.props.fallback ?? null) : this.props.children;
+  }
+}
+
+/**
+ * Error boundary for always-open lazy inline content (filter controls, chat-list rows, delegated cards).
+ * Unlike OverlayBoundary (which only resets on a false -> true `open` transition), this surfaces an accessible
+ * retry action so transient chunk failures recover cleanly on click or when `resetKey` changes.
+ */
+export class RecoverableLazyBoundary extends Component<
+  {
+    resetKey?: string | number;
+    children: ReactNode;
+    fallback?: (retry: () => void) => ReactNode;
+    compact?: boolean;
+  },
+  { failed: boolean; attempt: number }
+> {
+  state = { failed: false, attempt: 0 };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    reportBoundary(error, "overlay_boundary", isChunkError(error), info.componentStack);
+  }
+
+  componentDidUpdate(prev: { resetKey?: string | number }) {
+    if (this.state.failed && this.props.resetKey !== prev.resetKey) {
+      this.setState((s) => ({ failed: false, attempt: s.attempt + 1 }));
+    }
+  }
+
+  retry = () => {
+    this.setState((s) => ({ failed: false, attempt: s.attempt + 1 }));
+  };
+
+  render() {
+    if (!this.state.failed) {
+      return <Fragment key={this.state.attempt}>{this.props.children}</Fragment>;
+    }
+    if (this.props.fallback) return this.props.fallback(this.retry);
+    const label = t("app.retry");
+    return (
+      <button
+        type="button"
+        data-lazy-retry=""
+        aria-label={label}
+        title={label}
+        onClick={this.retry}
+        className={
+          this.props.compact
+            ? "inline-flex h-5 min-w-5 shrink-0 items-center justify-center whitespace-nowrap rounded-control px-1.5 text-submeta font-medium text-ink-3 hover:bg-hover hover:text-ink [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:min-w-11"
+            : "inline-flex items-center gap-1.5 whitespace-nowrap rounded-control border border-line bg-surface px-2.5 py-1 text-label font-medium text-ink-2 hover:bg-hover hover:text-ink [@media(pointer:coarse)]:min-h-11"
+        }
+      >
+        {label}
+      </button>
+    );
   }
 }
 

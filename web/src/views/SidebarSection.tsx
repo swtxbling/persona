@@ -111,8 +111,8 @@ export function SidebarGroup({ heading, children, className }: { heading: React.
 export function Section({ title, children, folded, onToggle, right, onMenu, first, top }: { title: React.ReactNode; children: React.ReactNode; folded: boolean; onToggle: () => void; right?: React.ReactNode; onMenu?: (at: MenuAt, el: HTMLElement) => void; first?: boolean; top?: boolean }) {
   return (
     <SidebarGroup className={first ? "mt-1" : "mt-3"} heading={
-      <div className={cx("group/sec relative flex select-none items-center gap-1 px-2 pb-1", top && "sidebar-heading")} {...(onMenu ? contextMenuProps(onMenu) : {})}>
-        <button type="button" aria-expanded={!folded} onClick={onToggle} className={cx("touch-hit relative z-10 flex flex-1 items-center gap-1 whitespace-nowrap text-left text-[11px] font-semibold text-ink-3 hover:text-ink-2", !top && right ? "min-w-(--row-title-min) basis-auto" : "min-w-0")}>
+      <div className={cx("@container group/sec relative flex select-none items-center gap-1 px-2 pb-1", top && "sidebar-heading")} {...(onMenu ? contextMenuProps(onMenu) : {})}>
+        <button type="button" aria-expanded={!folded} onClick={onToggle} className={cx("touch-hit relative z-10 flex flex-1 items-center gap-1 whitespace-nowrap text-left text-[11px] font-semibold text-ink-3 hover:text-ink-2", !top && right ? "min-w-0 @min-[10rem]:min-w-(--row-title-min) basis-auto" : "min-w-0")}>
           <span className="min-w-0 truncate">{title}</span>
           <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>

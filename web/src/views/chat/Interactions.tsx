@@ -1,5 +1,5 @@
 // What the agent is waiting on (questions, plans, permissions, terminal dialogs, MCP forms and links), as Beautiful UI's Approval Card.
-import { Component, createContext, Fragment, Suspense, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ErrorInfo, type ReactNode, type RefObject } from "react";
+import { Component, createContext, Fragment, Suspense, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType, type ErrorInfo, type ReactNode, type RefObject } from "react";
 import { answerCard, usePendingLine, type AnswerFrom } from "../../lib/card-answer";
 import { cardKeyAction, focusComposer } from "../../lib/card-keys";
 import { lazyPage } from "../../lib/lazy-page";
@@ -7,7 +7,7 @@ import { mergeRefs } from "../../lib/tap-guard";
 import { delegateLines, isDelegating, recommendedLabels, type DelegatedAnswer } from "../../lib/delegate";
 import { supervisorHeld } from "../../lib/supervisor-held";
 import { Choice, DigitHint } from "./Choice";
-import { OverlayBoundary } from "../LazyOverlay";
+import { RecoverableLazyBoundary } from "../LazyOverlay";
 import { BUSY_MOTION, spinStyle } from "../../lib/busy-motion";
 import { appArchiveDeps, archiveAgent, archiveSession } from "../../lib/agent-archives";
 import { isSessionReview } from "../../lib/types";
@@ -296,18 +296,25 @@ function ToolLoopCard({ ix }: { ix: Interaction }) {
 }
 
 const SessionReviewCard = lazyPage(() => import("./SessionReviewCard").then((m) => m.SessionReviewCard));
-const DelegatedCardContent = lazyPage(() => import("./Delegated").then((m) => m.DelegatedCard));
-const noopClose = () => {};
 
-function LazyDelegatedCard({ d }: { d: DelegatedAnswer }) {
-  return (
-    <OverlayBoundary open onClose={noopClose}>
-      <Suspense fallback={null}>
-        <DelegatedCardContent d={d} />
-      </Suspense>
-    </OverlayBoundary>
-  );
+/** Factory so unit tests can inject deterministic failing/recovering chunk loaders for DelegatedCard. */
+export function createLazyDelegatedCard(
+  load: () => Promise<ComponentType<{ d: DelegatedAnswer }>>,
+  listed = false,
+) {
+  const DelegatedCardContent = lazyPage(load, { listed });
+  return function LazyDelegatedCard({ d }: { d: DelegatedAnswer }) {
+    return (
+      <RecoverableLazyBoundary resetKey={d.ix.id}>
+        <Suspense fallback={null}>
+          <DelegatedCardContent d={d} />
+        </Suspense>
+      </RecoverableLazyBoundary>
+    );
+  };
 }
+
+const LazyDelegatedCard = createLazyDelegatedCard(() => import("./Delegated").then((m) => m.DelegatedCard), true);
 
 export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; canApprove: boolean; onAnswer?: (answers: Record<string, string>) => Promise<boolean> }) {
   const ime = useComposition();

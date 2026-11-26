@@ -1,20 +1,73 @@
-// Streaming Markdown made whole for the moment (ported from cindy's repairStreamingMarkdown): an unclosed code fence is
-// closed, an unclosed ** / * at the end is closed, a half-written image or link shows as its text. Only what the
-// growing end leaves open is touched, so half a delimiter doesn't flip the structure (and replay the fade) when its
-// other half arrives. Only while streaming; the finished text is rendered as written.
+// Streaming Markdown made whole for the moment: an actually open code fence is closed, an unclosed ** / * at the end is
+// closed, and a half-written image or link shows as its text. Fence decisions and container positions come from the same
+// ReactMarkdown parser that renders the reply; a candidate closer is accepted only after the parser confirms it closes
+// the original trailing code node rather than creating another block.
 
-import { closes, scanFenceRun, type Fence } from "./chunks";
+import { lastMarkdownBlock, parseMarkdown, walkMarkdown, type MarkdownNode, type MarkdownRoot } from "./syntax";
 
-// Whether the text ends inside a code fence (and with which), and the text outside fences.
-function scanFences(md: string): { open: Fence | null; outside: string } {
-  let open: Fence | null = null;
-  const outside: string[] = [];
-  for (const line of md.split(/\r?\n/)) {
-    const run = scanFenceRun(line, open);
-    if (run) open = !open ? run : closes(open, run) ? null : open;
-    else if (!open) outside.push(line);
+function lineStart(source: string, offset: number): number {
+  return source.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+}
+
+function fenceMarker(source: string, node: MarkdownNode): string | null {
+  const start = node.position?.start.offset;
+  if (node.type !== "code" || start === undefined) return null;
+  return /^(`{3,}|~{3,})/.exec(source.slice(start))?.[1] ?? null;
+}
+
+/** Blank list markers on the opener's own line; blockquote markers and indentation remain in the closing prefix. */
+function closingPrefix(source: string, node: MarkdownNode, ancestors: MarkdownNode[]): string {
+  const start = node.position?.start.offset;
+  const startLine = node.position?.start.line;
+  if (start === undefined || startLine === undefined) return "";
+  const atLine = lineStart(source, start);
+  const prefix = source.slice(atLine, start).split("");
+
+  for (const ancestor of ancestors) {
+    if (ancestor.type !== "listItem" || ancestor.position?.start.line !== startLine) continue;
+    const itemStart = ancestor.position.start.offset;
+    const first = ancestor.children?.[0];
+    if (itemStart === undefined || first?.position?.start.line !== startLine) continue;
+    const contentStart = first.position.start.offset;
+    if (contentStart === undefined) continue;
+    for (let i = itemStart - atLine; i < contentStart - atLine; i += 1) prefix[i] = " ";
   }
-  return { open, outside: outside.join("\n") };
+  return prefix.join("");
+}
+
+/** Return a parser-verified repair for the trailing open fence, or null when the source has none. */
+function repairOpenFence(source: string, tree: MarkdownRoot): string | null {
+  const { node, ancestors } = lastMarkdownBlock(tree);
+  const marker = fenceMarker(source, node);
+  const start = node.position?.start.offset;
+  if (!marker || start === undefined) return null;
+
+  const closer = `${closingPrefix(source, node, ancestors)}${marker}`;
+  const candidate = source.endsWith("\n") ? source + closer : `${source}\n${closer}`;
+  const parsed = lastMarkdownBlock(parseMarkdown(candidate)).node;
+  const closesOriginal =
+    parsed.type === "code" &&
+    parsed.position?.start.offset === start &&
+    parsed.position.end.offset === candidate.length &&
+    fenceMarker(candidate, parsed) === marker;
+  return closesOriginal ? candidate : null;
+}
+
+// Whether emphasis/code-span repair can see each source character. Complete fenced-code lines, including their
+// container prefixes, are blanked by parser position instead of being rediscovered with a second fence scanner.
+function outsideFences(source: string, tree: MarkdownRoot): string {
+  const outside = source.split("");
+  walkMarkdown(tree, (node) => {
+    if (!fenceMarker(source, node)) return;
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (start === undefined || end === undefined) return;
+    const from = lineStart(source, start);
+    const newline = source.indexOf("\n", end);
+    const to = newline < 0 ? source.length : newline;
+    for (let i = from; i < to; i += 1) if (outside[i] !== "\r") outside[i] = " ";
+  });
+  return outside.join("");
 }
 
 function escaped(text: string, i: number): boolean {
@@ -86,11 +139,10 @@ function holdHalfRow(md: string): string {
 
 export function repairStreamingMarkdown(md: string): string {
   if (!md) return md;
-  const { open, outside } = scanFences(md);
-  if (open) {
-    const marker = `${open.closingPrefix ?? ""}${open.marker.repeat(open.length)}`;
-    return md.endsWith("\n") ? md + marker : `${md}\n${marker}`;
-  }
+  const tree = parseMarkdown(md);
+  const repairedFence = repairOpenFence(md, tree);
+  if (repairedFence) return repairedFence;
+  const outside = outsideFences(md, tree);
   md = holdHalfRow(md);
   // half a code span: whatever * follows may be inside it
   let ticks = 0;

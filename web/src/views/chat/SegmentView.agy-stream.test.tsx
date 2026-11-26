@@ -243,6 +243,75 @@ describe("SegmentView AGY in-place live text streaming", () => {
     expect(host.querySelectorAll("[data-answer] [data-reply-images]").length).toBe(settledGalleries);
   });
 
+  it.each([
+    [
+      "ordered-list container indentation",
+      "See [docs][spec].\n\nMiddle paragraph.\n\n123. ```js\n     const x = 1;\n     ```\n\n[spec]: https://example.com/spec",
+    ],
+    [
+      "implicit blockquote termination",
+      "See [docs][spec].\n\nMiddle paragraph.\n\n> ```js\n> const x = 1;\n\n[spec]: https://example.com/spec",
+    ],
+  ])("keeps list/quote code DOM identity and resolves definitions after %s", (_name, md) => {
+    renderAgyLive(md, true);
+    const initialPre = host.querySelector("[data-answer] pre");
+    expect(initialPre).not.toBeNull();
+
+    let preRemoved = 0;
+    const countRemovals = (mutations: MutationRecord[]) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.removedNodes) {
+          if (node instanceof Element && (node.matches("pre, .code-block") || node.querySelector("pre, .code-block"))) preRemoved++;
+        }
+      }
+    };
+    const mo = new MutationObserver(countRemovals);
+    mo.observe(host, { childList: true, subtree: true });
+
+    renderAgyLive(md, false);
+    countRemovals(mo.takeRecords());
+    mo.disconnect();
+
+    expect(host.querySelectorAll("[data-answer] pre")).toHaveLength(1);
+    expect(host.querySelector("[data-answer] pre")).toBe(initialPre);
+    expect(initialPre?.isConnected).toBe(true);
+    expect(preRemoved).toBe(0);
+    expect(host.querySelector('[data-answer] a[href="https://example.com/spec"]')?.textContent).toBe("docs");
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    renderAgyLive(md, false);
+    expect(host.querySelectorAll("[data-answer] pre")).toHaveLength(1);
+    expect(host.querySelector('[data-answer] a[href="https://example.com/spec"]')?.textContent).toBe("docs");
+  });
+
+  it.each([
+    ["title", '![a](https://example.com/a.png\n"First picture")\n\n![b](https://example.com/b.png)'],
+    ["label", "![first\nlabel](https://example.com/a.png)\n\n![b](https://example.com/b.png)"],
+    ["destination", "![a](\nhttps://example.com/a.png\n)\n\n![b](https://example.com/b.png)"],
+  ])("merges complete multiline image %s paragraphs into one settled gallery", async (_name, md) => {
+    await loadReplyImages();
+    renderAgyLive(md, true);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    renderAgyLive(md, false);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(host.querySelectorAll("[data-answer] [data-reply-images]")).toHaveLength(1);
+    expect(host.querySelectorAll("[data-answer] [data-reply-picture] img, [data-answer] [data-reply-picture] span").length).toBeGreaterThan(0);
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    renderAgyLive(md, false);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(host.querySelectorAll("[data-answer] [data-reply-images]")).toHaveLength(1);
+  });
+
   it("flushes streaming throttle immediately when LatestAnswer switches to a distinct persisted item ID", () => {
     vi.useFakeTimers();
     try {

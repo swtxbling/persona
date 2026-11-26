@@ -6,12 +6,12 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { api, errorText } from "../../lib/api";
 import { assistantInfoText, conversationKey, effectiveLauncher, shortModel, usePickedLauncher } from "../../lib/assistant-chat";
 import { isBackgroundSupervisor } from "../../lib/background-supervisor";
-import { COMPACT_FEATURE, compactBody, compactionView, compactPath, NEW_MAIN_FEATURE, type CompactionView } from "../../lib/compaction";
+import { COMPACT_FEATURE, COMPACT_REQUESTED_EVENT, compactBody, compactionView, compactPath, NEW_MAIN_FEATURE, type CompactionView } from "../../lib/compaction";
 import { runtimeFallbackText } from "../../lib/runtime-fallback";
 import { personaState } from "../../lib/persona";
 import { conversationPage } from "../../lib/conversation-page";
 import { lazyPage } from "../../lib/lazy-page";
-import { CLEAR_MAIN_FEATURE, clearMainContext } from "../../lib/main-clear";
+import { CLEAR_MAIN_FEATURE, clearMainContext, useMainClearing } from "../../lib/main-clear";
 import { shownManager } from "../../lib/manager-choice";
 import { navigate } from "../../lib/router";
 import { hubHas, useStore } from "../../lib/store";
@@ -49,10 +49,19 @@ export function useAssistantMenu(session: Session | undefined): { items: MenuIte
   const canCompact = useStore((s) => hubHas(s.features, COMPACT_FEATURE));
   const canNewMain = useStore((s) => hubHas(s.features, NEW_MAIN_FEATURE));
   const canClear = useStore((s) => hubHas(s.features, CLEAR_MAIN_FEATURE));
+  const clearing = useMainClearing(session?.session_id);
   const picked = usePickedLauncher(session ? conversationKey(session.machine_id, session.session_id) : "");
-  const [newMain, setNewMain] = useState(false);
+  const isMain = Boolean(session && assistant?.main === session.session_id);
+  const mainScope = session ? JSON.stringify([session.machine_id, session.session_id, session.manager ?? "", isMain, canNewMain]) : "";
+  const [mainScopeState, setMainScopeState] = useState<{ scope: string; epoch: number }>(() => ({ scope: mainScope, epoch: 1 }));
+  const mainEpoch = mainScopeState.scope === mainScope ? mainScopeState.epoch : mainScopeState.epoch + 1;
+  if (mainScopeState.scope !== mainScope) {
+    setMainScopeState({ scope: mainScope, epoch: mainEpoch });
+  }
+  const [newMainState, setNewMainState] = useState<{ epoch: number; open: boolean }>({ epoch: mainEpoch, open: false });
+  const newMain = newMainState.epoch === mainEpoch && newMainState.open;
+  const setNewMain = (open: boolean) => setNewMainState({ epoch: mainEpoch, open });
   if (!session) return { items: [], dialogs: null };
-  const isMain = assistant?.main === session.session_id;
   const launcher = effectiveLauncher({ isMain, picked: session.model_pick?.launcher || picked, session: session.launcher, config: assistant?.launcher });
   const cwd = session.cwd || assistant?.cwd || "~/.persona/assistant";
   const title = !isMain && session.title && session.title !== "Claude Code" ? session.title : undefined;
@@ -66,7 +75,7 @@ export function useAssistantMenu(session: Session | undefined): { items: MenuIte
       ? [{ key: "compact", label: compacting ? t("assistant-assistantchat.compacting") : t("assistant-assistantchat.compact"), icon: "layers" as const, disabled: compacting, onSelect: () => void startCompaction(session) }]
       : []),
     // as /clear (#5095): no confirmation, the old conversation is archived, not deleted
-    ...(isMain && canClear ? [{ key: "clear", label: t("assistant-assistantchat.clear"), icon: "retry" as const, onSelect: () => void clearMainContext(session.session_id) }] : []),
+    ...(isMain && canClear ? [{ key: "clear", label: t("assistant-assistantchat.clear"), icon: "retry" as const, disabled: clearing, onSelect: () => void clearMainContext(session.session_id) }] : []),
     ...(isMain && canNewMain ? [{ key: "newmain", label: t("assistant-assistantchat.new_main_ellipsis"), icon: "compose" as const, onSelect: () => setNewMain(true) }] : []),
     {
       key: "copyinfo",
@@ -75,13 +84,13 @@ export function useAssistantMenu(session: Session | undefined): { items: MenuIte
       onSelect: () => void copyText(assistantInfoText({ title, isMain, sessionId: session.session_id, machine, machineId: session.machine_id, cwd, launcher, model: shortModel(session.model) || undefined })),
     },
   ];
-  const dialogs = isMain && canNewMain ? <NewMainDialog open={newMain} onClose={() => setNewMain(false)} session={session} /> : null;
+  const dialogs = isMain && canNewMain ? <NewMainDialog open={newMain} onClose={() => setNewMain(false)} session={session} scopeKey={`${mainEpoch}:${mainScope}`} /> : null;
   return { items, dialogs };
 }
 
 // ── Compact context ─────────────────────────────────────
 
-const COMPACT_REQUESTED = "persona:compact-requested";
+const COMPACT_REQUESTED = COMPACT_REQUESTED_EVENT;
 
 /** Asks the hub to compact the conversation; its progress comes on the session (`compaction`). */
 async function startCompaction(session: Session) {

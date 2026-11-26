@@ -794,4 +794,55 @@ describe("ManagerInstall default fallback parity (relative live wall-clock)", ()
     await flush();
     expect(onCode).toHaveBeenCalledWith(renewedCode, "m-1");
   });
+
+  it("blocks Escape, backdrop, and Cancel close while default createManager is in flight so onMade is not dropped", async () => {
+    const createGate = deferred<CreateManagerResult>();
+    mocks.createManager.mockReturnValueOnce(createGate.promise);
+    const onClose = vi.fn();
+    const onMade = vi.fn();
+
+    function Host() {
+      const [open, setOpen] = useState(true);
+      return (
+        <NewManager
+          open={open}
+          onClose={() => {
+            onClose();
+            setOpen(false);
+          }}
+          onMade={(manager, code) => {
+            onMade(manager, code);
+            setOpen(false);
+          }}
+        />
+      );
+    }
+
+    await act(async () => root.render(<Host />));
+    await setInput(activeDialog()!.querySelector("input")!, "Studio");
+    await act(async () => { findButton(activeDialog()!, t("settings-managers.create"))!.click(); });
+    expect(mocks.createManager).toHaveBeenCalledWith("Studio");
+
+    // Attempt Escape, Cancel, and backdrop dismiss while creation is in flight.
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await act(async () => { findButton(activeDialog()!, t("common.cancel"))!.click(); });
+    const backdrop = activeDialog()?.parentElement;
+    if (backdrop) {
+      await act(async () => { backdrop.click(); });
+    }
+    expect(onClose).not.toHaveBeenCalled();
+    expect(activeDialog()).not.toBeNull();
+
+    const created: CreateManagerResult = {
+      code: "mi_created_busy",
+      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+      manager: makeManager({ id: "m-created", name: "Studio" }),
+    };
+    await act(async () => { createGate.resolve(created); });
+    await flush();
+
+    expect(onMade).toHaveBeenCalledTimes(1);
+    expect(onMade).toHaveBeenCalledWith(created.manager, created);
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });

@@ -220,7 +220,7 @@ export function NewManagerView({ open, name, valid, busy, error, onNameChange, o
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={() => !busy && onClose()}
       width={400}
       title={t("settings-managers.new")}
       footer={
@@ -318,6 +318,7 @@ export function NewManager({ open, onClose, onMade, deps }: NewManagerProps) {
   };
 
   const handleClose = () => {
+    if (pendingRef.current !== null) return;
     onCloseRef.current();
   };
 

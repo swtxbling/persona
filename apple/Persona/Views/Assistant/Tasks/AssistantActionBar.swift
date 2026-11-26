@@ -565,70 +565,79 @@ struct AssistantActionBar: View {
         let content = Self.content(conversation, key: key)
         let row = entryRow
         let inMain = conversation == AppModel.shared.assistantMain?.sessionID && AppModel.shared.api != nil
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            if let open {
-                tray(open, content)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if wrapUpOpen, inMain {
-                WrapUpTray(conversation: conversation) { withAnimation(Theme.Motion.state) { wrapUpOpen = false } }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if heldOpen, let held {
-                PushInterceptsTray(model: held) { withAnimation(Theme.Motion.state) { heldOpen = false } }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-            // Wider than the bar (Wrap Up, Held Pushes, the computer's pill, or a large text size), the entries scroll
-            // sideways instead of running off its edge, as on the web and Android (#10922); while they fit nothing moves.
-            ScrollView(.horizontal, showsIndicators: false) {
-                row {
-                    if let dock {
-                        let ids = QuestionDock.cards(own: dockOwn, conversation: conversation).map(\.id)
-                        if !ids.isEmpty {
-                            QuestionDockEntry(count: ids.count, arrived: QuestionDockLogic.arrived(ids, seen: dock.seen),
-                                              open: dock.showing(ids)) {
-                                Haptics.tap()
-                                withAnimation(Theme.Motion.state) {
-                                    if dock.showing(ids) {
-                                        dock.fold(ids)
-                                    } else {
-                                        open = nil
-                                        wrapUpOpen = false
-                                        heldOpen = false
-                                        dock.show()
-                                    }
+        // Wider than the bar (Wrap Up, Held Pushes, the computer's pill, or a large text size), the entries scroll
+        // sideways instead of running off its edge, as on the web and Android (#10922); while they fit nothing moves.
+        ScrollView(.horizontal, showsIndicators: false) {
+            row {
+                if let dock {
+                    let ids = QuestionDock.cards(own: dockOwn, conversation: conversation).map(\.id)
+                    if !ids.isEmpty {
+                        QuestionDockEntry(count: ids.count, arrived: QuestionDockLogic.arrived(ids, seen: dock.seen),
+                                          open: dock.showing(ids)) {
+                            Haptics.tap()
+                            withAnimation(Theme.Motion.state) {
+                                if dock.showing(ids) {
+                                    dock.fold(ids)
+                                } else {
+                                    open = nil
+                                    wrapUpOpen = false
+                                    heldOpen = false
+                                    dock.show()
                                 }
                             }
                         }
                     }
-                    ForEach(content.entries(open: open)) { entry($0, count: content.count($0)) }
-                    if inMain {
-                        WrapUpEntry(conversation: conversation, open: wrapUpOpen) {
-                            withAnimation(Theme.Motion.state) {
-                                open = nil
-                                heldOpen = false
-                                wrapUpOpen.toggle()
-                            }
+                }
+                ForEach(content.entries(open: open)) { entry($0, count: content.count($0)) }
+                if inMain {
+                    WrapUpEntry(conversation: conversation, open: wrapUpOpen) {
+                        withAnimation(Theme.Motion.state) {
+                            open = nil
+                            heldOpen = false
+                            wrapUpOpen.toggle()
                         }
-                    }
-                    if inMain, let held {
-                        PushInterceptsEntry(model: held, open: heldOpen) {
-                            withAnimation(Theme.Motion.state) {
-                                open = nil
-                                wrapUpOpen = false
-                                heldOpen.toggle()
-                            }
-                        }
-                    }
-                    // A Mac the model operates (the screen-share module's pill), as the entries.
-                    ForEach(Modules.registry.views(at: .chatFooter).filter { $0.shows(.init(activity: computer)) }) {
-                        $0.view(.init(activity: computer)).background(Theme.pageBackground, in: .capsule)
                     }
                 }
-                .padding(.horizontal, Theme.Space.xs)
+                if inMain, let held {
+                    PushInterceptsEntry(model: held, open: heldOpen) {
+                        withAnimation(Theme.Motion.state) {
+                            open = nil
+                            wrapUpOpen = false
+                            heldOpen.toggle()
+                        }
+                    }
+                }
+                // A Mac the model operates (the screen-share module's pill), as the entries.
+                ForEach(Modules.registry.views(at: .chatFooter).filter { $0.shows(.init(activity: computer)) }) {
+                    $0.view(.init(activity: computer)).background(Theme.pageBackground, in: .capsule)
+                }
             }
-            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-            .padding(.top, Theme.Space.s)
+            .padding(.horizontal, Theme.Space.xs)
         }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .padding(.top, Theme.Space.s)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Open trays float above the capsule row instead of growing the footer layout height, so opening,
+        // switching, expanding rows, or closing a tray never shifts the chat message list.
+        // The concrete container keeps `.alignmentGuide(.top)` outside `_ConditionalContent` so `.overlay` reads `$0[.bottom]`.
+        .overlay(alignment: .top) {
+            VStack(spacing: 0) {
+                if let open {
+                    tray(open, content)
+                        .padding(.bottom, Theme.Space.s)
+                        .transition(.opacity)
+                } else if wrapUpOpen, inMain {
+                    WrapUpTray(conversation: conversation) { withAnimation(Theme.Motion.state) { wrapUpOpen = false } }
+                        .padding(.bottom, Theme.Space.s)
+                        .transition(.opacity)
+                } else if heldOpen, let held {
+                    PushInterceptsTray(model: held) { withAnimation(Theme.Motion.state) { heldOpen = false } }
+                        .padding(.bottom, Theme.Space.s)
+                        .transition(.opacity)
+                }
+            }
+            .alignmentGuide(.top) { $0[.bottom] }
+        }
         // No fade of its own: the chat runs on behind the bar and fades out there (`FooterFog`, #3696).
         .onChange(of: conversation) { open = nil; wrapUpOpen = false; heldOpen = false; expanded = []; drawn = []; planChoices = [:] }
         // One tray at a time: Needs You's, In Progress' or Finished's opening closes Wrap Up and Held Pushes.

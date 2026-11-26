@@ -2296,7 +2296,22 @@ struct ChatView: View {
                 // What the footer takes of the page: the pending cards grow into the rest while the keyboard is up.
                 // Exact, like the cards' own height inside it (`PendingCards.shown`): the cards take one from the other for
                 // what the footer holds besides them, which must not move with their own height (#1580).
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerRoom.footer = $0 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                    let old = scratch.footerHeight
+                    scratch.footerHeight = h
+                    footerRoom.footer = h
+                    guard old > 0 else { return }
+                    let d = old - h
+                    guard abs(d) >= 0.5 else { return }
+                    if abs(scratch.pendingListEdgeDelta - d) < 2 {
+                        scratch.pendingListEdgeDelta = 0
+                        scratch.pendingFooterDelta = 0
+                        applyFooterResize(d)
+                    } else {
+                        scratch.pendingListEdgeDelta = 0
+                        scratch.pendingFooterDelta += d
+                    }
+                }
         }
         // The height the page offers, even when what is in it is taller: the pending cards size themselves by it. A
         // frame with both bounds takes the offered size whatever the content (not a design value: no token for it).
@@ -2304,7 +2319,10 @@ struct ChatView: View {
         // A floating keyboard floats over the page: the composer stays at the bottom, the list keeps its height (#2565).
         .keepsHeightUnderUndockedKeyboard()
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-            if abs(footerRoom.height - h) >= 1 { footerRoom.height = h }
+            if abs(footerRoom.height - h) >= 1 {
+                footerRoom.height = h
+                scratch.pendingListEdgeDelta = 0
+            }
         }
         // As short as the list may get while the keyboard is up: the header over it (folded or not) and the hairline above
         // it. The cards take the rest (#1912).
@@ -3295,12 +3313,21 @@ struct ChatView: View {
             let old = scratch.listFrame
             scratch.listFrame = rect
             pin.riseTop = riseTop
-            // Drawn upside down from its bottom edge, the list moves everything on it when that edge moves: what sits
-            // under it came or went (the queue strip taken as the next turn started moved the rows the user had open
-            // 60 pt down, #3005). The pin puts a held row back. Only that edge: its top edge moving moves nothing on
-            // it, and going by the list's height the pin moved a work line's header 40 pt by itself (`UnfoldTests`).
-            // Not for the keyboard: the newest stays above it, as it always has.
-            if old.height > 0, !KeyboardState.shared.isUp { pin.resized(by: rect.maxY - old.maxY) }
+            // Drawn upside down from its bottom edge, the list moves everything on it when that edge moves because
+            // the footer resized (queue bar appearing/draining, route banner, cards; #3005). Matching against
+            // `ChatFooter.body`'s height delta isolates footer resizes from keyboard/window height changes, working
+            // both when the keyboard is down and when it stays steadily up.
+            guard old.height > 0 else { return }
+            let edgeDelta = rect.maxY - old.maxY
+            guard abs(edgeDelta) >= 0.5 else { return }
+            if abs(scratch.pendingFooterDelta) >= 0.5, abs(scratch.pendingFooterDelta - edgeDelta) < 2 {
+                let applied = scratch.pendingFooterDelta
+                scratch.pendingFooterDelta = 0
+                scratch.pendingListEdgeDelta = 0
+                applyFooterResize(applied)
+            } else {
+                scratch.pendingListEdgeDelta = edgeDelta
+            }
         }
         .scrollDismissesKeyboard(.interactively)
         .simultaneousGesture(TapGesture().onEnded { menu.dismiss(); Keyboard.dismiss() })
@@ -3489,13 +3516,24 @@ struct ChatView: View {
         }
         .onChange(of: store.pending.count) { old, new in
             guard new > old else { return }
-            scratch.sentHere = Array((scratch.sentHere + store.pending.map { (id: $0.id, text: $0.text) }).suffix(20))
-            scratch.sentAt = .now
+            let queuedToStrip = store.pending.last?.queuedMode == true && (style == .dev || session?.assistant == true)
+            if !queuedToStrip || follow.follows {
+                scratch.sentHere = Array((scratch.sentHere + store.pending.map { (id: $0.id, text: $0.text) }).suffix(20))
+                scratch.sentAt = .now
+            }
+            // A queued message goes into the queue strip rather than appending a bubble to the transcript, so avoid
+            // pulling a reader out of history or undoing compact footer-resize offset compensation at the newest end.
+            guard !queuedToStrip else { return }
             setFollow { $0.follow() }
             scrollToEnd(animated: true)
         }
         // Parse what rows will show (Markdown, paths) in the background as messages load: scrolling then only lays out.
         .task(id: prewarmKey) { await prewarmRows() }
+    }
+
+    /// Compensates the flipped transcript's scroll offset for a footer-only height delta (`d = oldFooter - newFooter`).
+    private func applyFooterResize(_ d: CGFloat) {
+        pin.resized(by: d, maxNewestGap: follow.near ? Self.endRoom : nil)
     }
 
     #if DEBUG
@@ -7153,14 +7191,7 @@ struct QueueStrip: View {
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
-            ScrollView {
-                rows
-            }
-            .scrollBounceBehavior(.basedOnSize)
-            // Its rows' own height until one is measured, not what it is offered: the footer is laid out first (#3703).
-            .fixedSize(horizontal: false, vertical: rowHeight == 0)
-            .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(drawnCount), Self.visibleRows) : nil)
-            .padding(.top, Theme.Space.sm)
+            EmptyView()
         } label: {
             Group {
                 if typeSize >= Theme.interfaceLargestTypeSize {
@@ -7190,6 +7221,33 @@ struct QueueStrip: View {
         .tint(.secondary)
         .padding(Theme.Space.m)
         .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
+        // Float the expanded queue list above the collapsed card so toggling or changing count never shifts the chat.
+        // Wrap in a concrete container so `.alignmentGuide(.top)` stays outside `_ConditionalContent`.
+        .overlay(alignment: .top) {
+            VStack(spacing: 0) {
+                if expanded {
+                    ScrollView {
+                        rows
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                    // Cap initial unmeasured height when more than `visibleRows` are queued to avoid a first-frame jump.
+                    .fixedSize(horizontal: false, vertical: rowHeight == 0 && drawnCount <= Int(Self.visibleRows))
+                    .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(drawnCount), Self.visibleRows) : nil)
+                    .frame(maxHeight: rowHeight == 0 ? Theme.Size.tapTarget * Self.visibleRows : nil)
+                    .padding(Theme.Space.m)
+                    .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
+                    .padding(.bottom, Theme.Space.s)
+                    .transition(.opacity)
+                }
+            }
+            .alignmentGuide(.top) { $0[.bottom] }
+        }
+        .onChange(of: total == 0) { _, empty in
+            if empty {
+                expanded = false
+                relayedExpanded = false
+            }
+        }
         .transition(.move(edge: .bottom).combined(with: .opacity))
         .accessibilityIdentifier("queue-strip")
     }
@@ -8618,6 +8676,11 @@ final class ChatScratch {
     /// the header keeps the header under the finger.
     var workHeadY: [String: CGFloat] = [:]
     var listFrame: CGRect = .zero
+    /// Footer-only height tracking to pair `ChatFooter.body` resizes with `chatScroll()` bottom-edge movement
+    /// without falsely triggering on keyboard or window height changes.
+    var footerHeight: CGFloat = 0
+    var pendingFooterDelta: CGFloat = 0
+    var pendingListEdgeDelta: CGFloat = 0
     /// The bottom on screen of the line being landed on (`ChatView.landing`).
     var landingMaxY: CGFloat?
     /// The list's horizontal offset at rest (-16: the side margins are content margins). Vertical jumps keep it:

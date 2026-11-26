@@ -256,17 +256,13 @@ struct ShellComposerBar<Attach: View, Modes: View, Top: View>: View {
             .contentShape(.rect(cornerRadius: Theme.Shell.composerRadius))
             .onTapGesture { if !barOn { focused.wrappedValue = true } }
         VStack(alignment: .leading, spacing: 0) {
+            // Top-corner clipping is applied to each inline header inside `ComposerTopSlot` rather than here so
+            // floating popovers (such as expanded queued messages) anchored to the top slot are never clipped.
             top()
-                .clipShape(
-                    UnevenRoundedRectangle(
-                        topLeadingRadius: Theme.Shell.composerRadius,
-                        topTrailingRadius: Theme.Shell.composerRadius,
-                        style: .continuous
-                    )
-                )
+                .zIndex(1)
             input
         }
-        .modifier(ComposerSurface())
+        .modifier(ComposerSurface(clipsContent: false))
         #if os(iOS)
         .overlay { ComposerHoldOverlay(hold: hold) }
         .coordinateSpace(.named(ComposerHold.space))
@@ -762,9 +758,18 @@ private struct ComposerBoxLayout: Layout {
 /// The composer's surface: the white card with its stroke and shadow, or in the BeautifulUI style its raised surface.
 /// The voice bar wears it too (it takes the composer's place in a call, docs/assistant/voice.md 6.2).
 struct ComposerSurface: ViewModifier {
+    /// Set to false when the composer hosts overlays (such as the expanded queue drawer) that extend above its bounds.
+    var clipsContent = true
+
     func body(content: Content) -> some View {
         if AppStyle.current.usesBeautifulUI {
-            content.buiSurface(radius: Theme.Shell.composerRadius, elevation: .raised)
+            if clipsContent {
+                content.buiSurface(radius: Theme.Shell.composerRadius, elevation: .raised)
+            } else {
+                content.background {
+                    Color.clear.buiSurface(radius: Theme.Shell.composerRadius, elevation: .raised)
+                }
+            }
         } else {
             content
                 .background {

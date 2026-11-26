@@ -207,27 +207,37 @@ import SwiftUI
         resume = nil
     }
 
-    /// The list's bottom edge moved down by `by` on screen (up if negative): what sits under it came or went (the queue
-    /// strip, a card, the mode bar). Drawn upside down from that edge, everything on it moved by as much; a held header
-    /// is put back where it was. The queued message taken as the next turn started moved the rows the user had open
-    /// 60 pt down (#3005).
-    func resized(by d: CGFloat) {
+    /// The list's bottom edge moved down by `d` on screen (up if negative) due to a footer height change (such as the
+    /// queue bar, route banner, or a card). Drawn upside down from that edge, every visible row would move by `d`.
+    /// When a work-line header is held, puts that header back where it was (#3005); otherwise adjusts `contentOffset.y`
+    /// by `-d` so visible rows stay stationary on screen. `maxNewestGap` caps upward absorption near the newest end so
+    /// tall cards or multi-line drafts never cover the newest message.
+    func resized(by d: CGFloat, maxNewestGap: CGFloat? = nil) {
         #if DEBUG
         if abs(d) >= 0.5 { resizes += 1; lastResize = d }
         #endif
-        guard var h = held, Self.on(h), abs(d) >= 0.5, let list, !list.isTracking, !list.isDecelerating,
-              let spot = last[h.key] else { return }
-        h.base -= d
-        held = h
-        want = wanted(h, grown: spot.content - h.at.content)
-        guard glideTicker != nil, let want, var path = glidePath else { return put(list) }
-        // Gliding, the glide's way moves with the edge, from this frame on. A work line folded at the newest end brings
-        // its plan back as the pill over the composer, the list's bottom edge 40 pt up a pass after the fold started the
-        // glide: the glide kept its way, and the header showed 40 pt up for a frame before it glided down.
-        path.from -= d
-        path.to = limited(list, want, content: known(reach))
-        glidePath = path
-        glideTo(list, at: CACurrentMediaTime())
+        guard abs(d) >= 0.5, let list, !list.isTracking, !list.isDecelerating else { return }
+        if var h = held, Self.on(h), let spot = last[h.key] {
+            h.base -= d
+            held = h
+            want = wanted(h, grown: spot.content - h.at.content)
+            guard glideTicker != nil, let want, var path = glidePath else { return put(list) }
+            // Gliding, the glide's way moves with the edge, from this frame on. A work line folded at the newest end brings
+            // its plan back as the pill over the composer, the list's bottom edge 40 pt up a pass after the fold started the
+            // glide: the glide kept its way, and the header showed 40 pt up for a frame before it glided down.
+            path.from -= d
+            path.to = limited(list, want, content: known(reach))
+            glidePath = path
+            glideTo(list, at: CACurrentMediaTime())
+            return
+        }
+        let insetTop = list.adjustedContentInset.top
+        let desired = list.contentOffset.y - d
+        if let maxNewestGap, d < 0, desired + insetTop > maxNewestGap { return }
+        let target = Self.within(list, desired)
+        if abs(target - list.contentOffset.y) >= 0.5 {
+            list.contentOffset.y = target
+        }
     }
 
     /// The kept hold is no longer kept (the line folded, another one opened): it lasts the usual time from now, so what

@@ -36,38 +36,63 @@ struct ComposerQueuedTop: View {
         let own = session?.ownQueuedCount ?? queued.count
         let sending = QueuePlacement.split(chat.arriving + chat.pending, working: session?.status.isActive == true,
                                            queued: queued, stripShown: true).strip
-        if !queued.isEmpty || !sending.isEmpty {
-            let relays = queued.dropFirst(own).map { QueuedRelay($0) }
-            let steers = session?.steersQueue == true || (session?.assistant == true && session?.canSend == true)
-            let photoMarks = chat.queuePhotoMarks
-            let persona = model.assistantShownName
-            let total = queued.count + sending.count
-            let relayedCount = max(queued.count - own, 0)
-            let drawnCount = own + sending.count + (relayedCount > 0 ? (relayedExpanded ? relayedCount : 1) : 0)
-            let preview = Self.collapsedPreview(queued: queued, own: own, sending: sending, photoMarks: photoMarks)
+        let total = queued.count + sending.count
+        Group {
+            if total > 0 {
+                let relays = queued.dropFirst(own).map { QueuedRelay($0) }
+                let steers = session?.steersQueue == true || (session?.assistant == true && session?.canSend == true)
+                let photoMarks = chat.queuePhotoMarks
+                let persona = model.assistantShownName
+                let relayedCount = max(queued.count - own, 0)
+                let drawnCount = own + sending.count + (relayedCount > 0 ? (relayedExpanded ? relayedCount : 1) : 0)
+                let preview = Self.collapsedPreview(queued: queued, own: own, sending: sending, photoMarks: photoMarks)
 
-            VStack(alignment: .leading, spacing: 0) {
-                header(total: total, preview: preview, own: own, steers: steers, persona: persona)
-                if expanded {
-                    ScrollView {
-                        rows(queued: queued, own: own, relays: relays, sending: sending, photoMarks: photoMarks,
-                             steers: steers, relayedCount: relayedCount, drawnCount: drawnCount)
-                    }
-                    .scrollBounceBehavior(.basedOnSize)
-                    .fixedSize(horizontal: false, vertical: rowHeight == 0)
-                    .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(drawnCount), Self.visibleRows) : nil)
-                    .padding(.horizontal, Theme.Space.m)
-                    .padding(.bottom, Theme.Space.s)
-                    .transition(.opacity)
+                VStack(alignment: .leading, spacing: 0) {
+                    header(total: total, preview: preview, own: own, steers: steers, persona: persona)
+                    Rectangle()
+                        .fill(Theme.Shell.composerStroke)
+                        .frame(height: Theme.Size.hairline)
                 }
-                Rectangle()
-                    .fill(Theme.Shell.composerStroke)
-                    .frame(height: Theme.Size.hairline)
+                .clipShape(
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: Theme.Shell.composerRadius,
+                        topTrailingRadius: Theme.Shell.composerRadius,
+                        style: .continuous
+                    )
+                )
+                // Float the expanded queue list above the composer so expanding, collapsing, or changing queued
+                // count never grows the footer layout height or shifts the chat message list.
+                // Wrap in a concrete container so `.alignmentGuide(.top)` stays outside `_ConditionalContent`.
+                .overlay(alignment: .top) {
+                    VStack(spacing: 0) {
+                        if expanded {
+                            ScrollView {
+                                rows(queued: queued, own: own, relays: relays, sending: sending, photoMarks: photoMarks,
+                                     steers: steers, relayedCount: relayedCount, drawnCount: drawnCount)
+                            }
+                            .scrollBounceBehavior(.basedOnSize)
+                            .fixedSize(horizontal: false, vertical: rowHeight == 0 && drawnCount <= Int(Self.visibleRows))
+                            .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(drawnCount), Self.visibleRows) : nil)
+                            .frame(maxHeight: rowHeight == 0 ? Theme.Size.tapTarget * Self.visibleRows : nil)
+                            .padding(Theme.Space.m)
+                            .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
+                            .padding(.bottom, Theme.Space.s)
+                            .transition(.opacity)
+                        }
+                    }
+                    .alignmentGuide(.top) { $0[.bottom] }
+                }
+                .animation(Theme.Motion.state, value: expanded)
+                .transition(.opacity)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("queue-strip")
             }
-            .animation(Theme.Motion.state, value: expanded)
-            .transition(.opacity)
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("queue-strip")
+        }
+        .onChange(of: total == 0) { _, empty in
+            if empty {
+                expanded = false
+                relayedExpanded = false
+            }
         }
     }
 
@@ -421,6 +446,13 @@ struct ComposerRouteTop: View {
                     .fill(Theme.Shell.composerStroke)
                     .frame(height: Theme.Size.hairline)
             }
+            .clipShape(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: Theme.Shell.composerRadius,
+                    topTrailingRadius: Theme.Shell.composerRadius,
+                    style: .continuous
+                )
+            )
             .transition(.opacity)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("composer-route-top")

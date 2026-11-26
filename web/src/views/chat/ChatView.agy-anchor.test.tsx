@@ -157,4 +157,87 @@ describe("ChatView ThinkingRow disclosure scroll anchor", () => {
     });
     expect(sc.scrollTop).toBe(1800);
   });
+
+  it("anchors scroll on keyboard Enter activation of a focused ThinkingRow instead of jumping to scrollHeight", async () => {
+    const { sc, row, setScrollHeight } = await mountWithOpenWorkGroup();
+
+    row.focus();
+    await act(async () => {
+      row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+    });
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+
+    setScrollHeight(3120);
+    await act(async () => {
+      for (const cb of roCallbacks) cb([], {} as ResizeObserver);
+    });
+    expect(sc.scrollTop).toBe(700);
+  });
+
+  it("anchors scroll on keyboard Space activation of a focused ThinkingRow instead of jumping to scrollHeight", async () => {
+    const { sc, row, setScrollHeight } = await mountWithOpenWorkGroup();
+
+    row.focus();
+    await act(async () => {
+      row.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true, cancelable: true }));
+    });
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+
+    setScrollHeight(3120);
+    await act(async () => {
+      for (const cb of roCallbacks) cb([], {} as ResizeObserver);
+    });
+    expect(sc.scrollTop).toBe(700);
+  });
+
+  it("still treats ArrowDown as reader movement and releases the disclosure anchor", async () => {
+    const { sc, row, setRowTop, setScrollHeight } = await mountWithOpenWorkGroup();
+
+    row.focus();
+    await act(async () => {
+      row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+    });
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+
+    // Confirm the anchor is active right after Enter (rowTop shift 200 -> 230 compensates scrollTop by +30).
+    setRowTop(230);
+    setScrollHeight(3120);
+    await act(async () => {
+      for (const cb of roCallbacks) cb([], {} as ResizeObserver);
+    });
+    expect(sc.scrollTop).toBe(730);
+
+    // ArrowDown counts as readerMoves and drops the active unfold anchor.
+    await act(async () => {
+      row.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", bubbles: true, cancelable: true }));
+    });
+
+    // After ArrowDown releases the anchor, a further rowTop shift (230 -> 290) no longer moves scrollTop.
+    setRowTop(290);
+    setScrollHeight(3200);
+    await act(async () => {
+      for (const cb of roCallbacks) cb([], {} as ResizeObserver);
+    });
+    expect(sc.scrollTop).toBe(730);
+  });
+
+  it("keeps native button[aria-expanded] Enter/Space activation anchored cleanly", async () => {
+    const { sc, setScrollHeight } = await mountWithOpenWorkGroup();
+    const wgBtn = host.querySelector<HTMLButtonElement>('[data-work-group] > button[aria-expanded="true"]')!;
+    wgBtn.getBoundingClientRect = () => ({ top: 160, bottom: 188, left: 40, right: 860, width: 820, height: 28, x: 40, y: 160, toJSON() {} });
+
+    // Collapse via Enter (keydown + browser-synthesized click on native <button>).
+    wgBtn.focus();
+    await act(async () => {
+      wgBtn.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+      wgBtn.click();
+    });
+    expect(wgBtn.getAttribute("aria-expanded")).toBe("false");
+
+    setScrollHeight(2600);
+    await act(async () => {
+      for (const cb of roCallbacks) cb([], {} as ResizeObserver);
+    });
+    expect(sc.scrollTop).toBe(700);
+  });
 });

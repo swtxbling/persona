@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { createTextThrottle, throttleInterval, THROTTLE_BASE_MS, THROTTLE_MAX_MS, type ThrottleClock } from "./throttle";
+// @vitest-environment jsdom
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTextThrottle, throttleInterval, THROTTLE_BASE_MS, THROTTLE_MAX_MS, useThrottledText, type ThrottleClock } from "./throttle";
 
 describe("throttleInterval", () => {
   it("grows with the text and stops at 400 ms", () => {
@@ -118,5 +121,75 @@ describe("createTextThrottle", () => {
     t.cancel();
     t.push("y");
     expect(out).toEqual(["a", "x", "y"]);
+  });
+});
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+describe("useThrottledText", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    vi.useRealTimers();
+  });
+
+  function Probe({ value, enabled, sourceKey }: { value: string; enabled: boolean; sourceKey?: string }) {
+    const shown = useThrottledText(value, enabled, sourceKey);
+    return createElement("div", { "data-key": sourceKey ?? "" }, shown);
+  }
+
+  it("resets throttle immediately when sourceKey changes while still throttling same-key updates", () => {
+    const draw = (value: string, enabled: boolean, sourceKey?: string) =>
+      act(() => root.render(createElement(Probe, { value, enabled, sourceKey })));
+
+    draw("Previous narration", true, "15@a#text");
+    expect(host.textContent).toBe("Previous narration");
+
+    // Same-key update within throttle interval stays throttled until the interval elapses.
+    act(() => vi.advanceTimersByTime(10));
+    draw("Previous narration extended", true, "15@a#text");
+    expect(host.textContent).toBe("Previous narration");
+
+    // Distinct sourceKey within the same throttle window renders the new item immediately and cancels the old pending timer.
+    draw("New reply", true, "16@b#text");
+    expect(host.firstElementChild?.getAttribute("data-key")).toBe("16@b#text");
+    expect(host.textContent).toBe("New reply");
+
+    // Same-key update on the new item still throttles normally.
+    act(() => vi.advanceTimersByTime(10));
+    draw("New reply extended", true, "16@b#text");
+    expect(host.textContent).toBe("New reply");
+
+    // Once the throttle window elapses, the new item's pending update lands (never the canceled old item's text).
+    act(() => vi.advanceTimersByTime(300));
+    expect(host.textContent).toBe("New reply extended");
+  });
+
+  it("keeps backwards-compatible throttling when sourceKey is omitted", () => {
+    const draw = (value: string, enabled: boolean) =>
+      act(() => root.render(createElement(Probe, { value, enabled })));
+
+    draw("Delta 1", true);
+    expect(host.textContent).toBe("Delta 1");
+
+    act(() => vi.advanceTimersByTime(10));
+    draw("Delta 2", true);
+    expect(host.textContent).toBe("Delta 1");
+
+    act(() => vi.advanceTimersByTime(300));
+    expect(host.textContent).toBe("Delta 2");
+
+    draw("Final", false);
+    expect(host.textContent).toBe("Final");
   });
 });

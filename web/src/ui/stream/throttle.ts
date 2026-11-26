@@ -96,18 +96,23 @@ export function createTextThrottle(emit: (text: string) => void, clock: Throttle
   };
 }
 
-/** `value`, rendered at most once per interval while `enabled`; the latest value at once when it isn't. */
-export function useThrottledText(value: string, enabled: boolean): string {
-  const [shown, setShown] = useState(value);
+/** `value`, rendered at most once per interval while `enabled`; the latest value at once when it isn't or when `sourceKey` changes. */
+export function useThrottledText(value: string, enabled: boolean, sourceKey?: string): string {
+  const [shown, setShown] = useState(() => ({ key: sourceKey, text: value }));
+  const activeKey = useRef(sourceKey);
   const throttle = useRef<TextThrottle | null>(null);
-  throttle.current ??= createTextThrottle(setShown);
+  throttle.current ??= createTextThrottle((text) => setShown({ key: activeKey.current, text }));
   // nothing emitted in this stream yet: `shown` may be the last stream's (a text that isn't streaming costs no state)
   const fresh = useRef(true);
   useEffect(() => {
+    if (activeKey.current !== sourceKey) {
+      throttle.current!.cancel();
+      activeKey.current = sourceKey;
+    }
     if (enabled) throttle.current!.push(value);
     else throttle.current!.cancel();
     fresh.current = !enabled;
-  }, [value, enabled]);
+  }, [value, enabled, sourceKey]);
   useEffect(() => () => throttle.current?.cancel(), []);
-  return enabled && !fresh.current ? shown : value;
+  return enabled && !fresh.current && shown.key === sourceKey ? shown.text : value;
 }

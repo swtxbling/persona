@@ -1178,6 +1178,8 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   useEffect(() => {
     const sc = scroller.current;
     if (!sc) return;
+    const DISCLOSURE = 'button[aria-expanded], [role="button"][aria-expanded]';
+    const isActivationKey = (e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && !e.metaKey && !e.ctrlKey && !e.altKey;
     let resume = 0;
     // the reader scrolled (wheel, finger, keys) while an unfold held following off: the pause does not pull them back
     let moved = false;
@@ -1185,20 +1187,18 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
       if (anchor.current) clearTimeout(anchor.current.quiet);
       anchor.current = null;
     };
-    const readerMoves = () => {
+    const readerMoves = (e: Event) => {
+      if (e instanceof KeyboardEvent && isActivationKey(e) && e.target instanceof Element) {
+        const el = e.target.closest(DISCLOSURE);
+        if (el && sc.contains(el)) return;
+      }
       moved = true;
       suppressAutoEarlier.current = false;
       drop();
       stopGlide();
       landing.current = null;
     };
-    const onClick = (e: MouseEvent) => {
-      const el = e.target instanceof Element ? e.target.closest('button[aria-expanded], [role="button"][aria-expanded]') : null;
-      if (!el || !sc.contains(el)) return;
-      if (el.tagName !== "BUTTON" && el.getAttribute("aria-expanded") === "true") {
-        const sel = window.getSelection();
-        if (sel && !sel.isCollapsed && sel.anchorNode && el.contains(sel.anchorNode)) return;
-      }
+    const anchorDisclosure = (el: Element) => {
       drop();
       clearTimeout(resume);
       const was = atEnd.current;
@@ -1216,12 +1216,29 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
         sc.scrollTop = sc.scrollHeight;
       }, UNFOLD_PAUSE);
     };
+    const onClick = (e: MouseEvent) => {
+      const el = e.target instanceof Element ? e.target.closest(DISCLOSURE) : null;
+      if (!el || !sc.contains(el)) return;
+      if (el.tagName !== "BUTTON" && el.getAttribute("aria-expanded") === "true") {
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed && sel.anchorNode && el.contains(sel.anchorNode)) return;
+      }
+      anchorDisclosure(el);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat || !isActivationKey(e)) return;
+      const el = e.target instanceof Element ? e.target.closest(DISCLOSURE) : null;
+      if (!el || !sc.contains(el) || el.tagName === "BUTTON") return;
+      anchorDisclosure(el);
+    };
     sc.addEventListener("click", onClick, true);
+    sc.addEventListener("keydown", onKeyDown, true);
     for (const ev of ["wheel", "touchstart", "keydown", "pointerdown"]) sc.addEventListener(ev, readerMoves, { passive: true });
     return () => {
       drop();
       clearTimeout(resume);
       sc.removeEventListener("click", onClick, true);
+      sc.removeEventListener("keydown", onKeyDown, true);
       for (const ev of ["wheel", "touchstart", "keydown", "pointerdown"]) sc.removeEventListener(ev, readerMoves);
     };
   }, [follow, scrollEl, stopGlide, captureReadingAnchor]);

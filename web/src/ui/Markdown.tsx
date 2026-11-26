@@ -651,11 +651,11 @@ function componentsFor(mid: string, cwd: string | undefined, readOnly = false): 
 // "Reply animation" off or reduced motion; once streaming ends it is plain Markdown again, without the fade's spans.
 // `lineBreaks`: a reply, read line by line as it was written (#2088, `reply-breaks.ts`): a single line break is one,
 // and steps numbered on from 5 right under a line of text are a list.
-export const Markdown = memo(function Markdown({ text: raw, small, compact, mid, cwd, streaming, fade, lineBreaks, askImages, readOnly }: { text: string; small?: boolean; compact?: boolean; mid?: string; cwd?: string; streaming?: boolean; fade?: boolean; lineBreaks?: boolean; askImages?: boolean; readOnly?: boolean }) {
+export const Markdown = memo(function Markdown({ text: raw, small, compact, mid, cwd, streaming, streamKey, fade, lineBreaks, askImages, readOnly }: { text: string; small?: boolean; compact?: boolean; mid?: string; cwd?: string; streaming?: boolean; streamKey?: string; fade?: boolean; lineBreaks?: boolean; askImages?: boolean; readOnly?: boolean }) {
   const inheritedReadOnly = useReadOnlyFile();
   const ro = Boolean(readOnly || inheritedReadOnly);
   const components = useMemo<Components>(() => (mid ? componentsFor(mid, cwd, ro) : markdownComponents), [mid, cwd, ro]);
-  const text = useThrottledText(raw, Boolean(streaming));
+  const text = useThrottledText(raw, Boolean(streaming), streamKey);
   const motion = useReplyMotion();
   const wordFade = useWordFade(Boolean(streaming) && motion, Boolean(fade && !streaming) && motion, text);
   const settled = streaming ? writtenText(text) : text;
@@ -682,12 +682,13 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [key, highlight, katex, images, Boolean(mid)],
   );
-  // Keep the first parser (and its paragraph/selection) mounted when a stream settles. Parse the
-  // finished text as a whole document so cross-block references and footnotes still resolve.
+  // Keep the streaming chunk parsers mounted when a stream settles so sealed blocks (like code fences)
+  // preserve their DOM identity and selection; splitChunks already falls back to a single whole-document
+  // chunk whenever cross-block references, footnotes, or HTML blocks are present.
   const streamed = useRef(false);
   useEffect(() => { if (streaming) streamed.current = true; }, [streaming]);
   const retainParser = streamed.current;
-  const chunks = useMemo(() => streaming ? splitChunks(md) : wordFade || retainParser ? [{ start: 0, content: md }] : null, [md, streaming, wordFade, retainParser]);
+  const chunks = useMemo(() => (streaming || retainParser ? splitChunks(md) : wordFade ? [{ start: 0, content: md }] : null), [md, streaming, wordFade, retainParser]);
   // A finished block: its tree from the cache when this text was drawn with the same plugins and links before.
   const tree = useMemo(
     () =>

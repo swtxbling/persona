@@ -7,7 +7,7 @@ import { segments } from "../../lib/turns";
 import type { Item } from "../../lib/types";
 import { ChatContext, type ChatContextValue } from "./chat-context";
 
-const markdownCalls = vi.hoisted(() => [] as { text: string; streaming?: boolean }[]);
+const markdownCalls = vi.hoisted(() => [] as { text: string; streaming?: boolean; streamKey?: string }[]);
 const extraMounts = vi.hoisted(() => ({ files: 0, ports: 0 }));
 
 vi.mock("../../ui/Markdown", async (load) => {
@@ -16,7 +16,7 @@ vi.mock("../../ui/Markdown", async (load) => {
   return {
     ...real,
     Markdown: (p: ComponentProps<typeof real.Markdown>) => {
-      markdownCalls.push({ text: p.text, streaming: p.streaming });
+      markdownCalls.push({ text: p.text, streaming: p.streaming, streamKey: p.streamKey });
       return createElement(real.Markdown, p);
     },
   };
@@ -62,12 +62,7 @@ afterEach(() => {
   host.remove();
 });
 
-function renderAgyLive(text: string, live: boolean) {
-  const items: Item[] = [
-    { id: "14@u#0", seq: 14, role: "user", kind: "text", text: "Write the fix", ts: "2026-11-26T00:00:00Z" },
-    { id: "15@p#thinking", seq: 15, role: "assistant", kind: "thinking", text: "Planning", ts: "2026-11-26T00:00:01Z" },
-    { id: "15@p#text", seq: 15, role: "assistant", kind: "text", text, ts: "2026-11-26T00:00:02Z" },
-  ];
+function renderItems(items: Item[], live: boolean) {
   const [seg] = segments(items);
   act(() => {
     root.render(
@@ -78,8 +73,19 @@ function renderAgyLive(text: string, live: boolean) {
   });
 }
 
+function renderAgyLive(text: string, live: boolean) {
+  renderItems(
+    [
+      { id: "14@u#0", seq: 14, role: "user", kind: "text", text: "Write the fix", ts: "2026-11-26T00:00:00Z" },
+      { id: "15@p#thinking", seq: 15, role: "assistant", kind: "thinking", text: "Planning", ts: "2026-11-26T00:00:01Z" },
+      { id: "15@p#text", seq: 15, role: "assistant", kind: "text", text, ts: "2026-11-26T00:00:02Z" },
+    ],
+    live,
+  );
+}
+
 describe("SegmentView AGY in-place live text streaming", () => {
-  it("streams in-place AGY text incrementally via StreamChunk, keeps <pre> mounted, and gates reply probes until settle", () => {
+  it("streams in-place AGY text incrementally via StreamChunk, preserves <pre> DOM identity across settle, and gates reply probes until settle", async () => {
     const chunk0 = "Intro paragraph.\n\n```ts\nconst a = 1;";
     const chunk1 = "Intro paragraph.\n\n```ts\nconst a = 1;\nconst b = 2;\n```";
     const chunk2 = `${chunk1}\n\nClosing paragraph.`;
@@ -91,13 +97,13 @@ describe("SegmentView AGY in-place live text streaming", () => {
     expect(extraMounts.ports).toBe(0);
 
     const introP = host.querySelector("[data-answer] p");
-    const preEl = host.querySelector("[data-answer] pre");
+    const initialPre = host.querySelector("[data-answer] pre");
     expect(introP).not.toBeNull();
-    expect(preEl).not.toBeNull();
+    expect(initialPre).not.toBeNull();
 
-    // Track destructive <pre> removals across in-place updates and settle.
+    // Track destructive <pre> removals across in-place updates and settlement.
     let preRemoved = 0;
-    const mo = new MutationObserver((muts) => {
+    const countRemovals = (muts: MutationRecord[]) => {
       for (const m of muts) {
         for (const n of m.removedNodes) {
           if (n instanceof Element && (n.matches("pre, .code-block") || n.querySelector("pre, .code-block"))) {
@@ -105,26 +111,82 @@ describe("SegmentView AGY in-place live text streaming", () => {
           }
         }
       }
-    });
+    };
+    const mo = new MutationObserver(countRemovals);
     mo.observe(host, { childList: true, subtree: true });
 
     renderAgyLive(chunk1, true);
+    countRemovals(mo.takeRecords());
+    await Promise.resolve();
     expect(markdownCalls.at(-1)?.streaming).toBe(true);
     expect(host.querySelector("[data-answer] p")).toBe(introP);
-    expect(host.querySelector("[data-answer] pre")).toBe(preEl);
+    expect(host.querySelector("[data-answer] pre")).toBe(initialPre);
+    expect(initialPre?.isConnected).toBe(true);
+    expect(preRemoved).toBe(0);
 
     renderAgyLive(chunk2, true);
+    countRemovals(mo.takeRecords());
+    await Promise.resolve();
     expect(host.querySelector("[data-answer] p")).toBe(introP);
-    expect(host.querySelector("[data-answer] pre")).toBe(preEl);
+    expect(host.querySelector("[data-answer] pre")).toBe(initialPre);
+    expect(initialPre?.isConnected).toBe(true);
+    expect(preRemoved).toBe(0);
     expect(extraMounts.files).toBe(0);
     expect(extraMounts.ports).toBe(0);
 
-    // Settle the turn (live: true -> false): retainParser preserves DOM and reply probes mount.
+    // Settle the turn (live: true -> false): keep chunk keys mounted so <pre> survives, and mount reply probes.
     renderAgyLive(chunk2, false);
+    countRemovals(mo.takeRecords());
+    await Promise.resolve();
     mo.disconnect();
     expect(markdownCalls.at(-1)?.streaming).toBeUndefined();
     expect(preRemoved).toBe(0);
+    expect(host.querySelector("[data-answer] p")).toBe(introP);
+    expect(host.querySelector("[data-answer] pre")).toBe(initialPre);
+    expect(initialPre?.isConnected).toBe(true);
     expect(extraMounts.files).toBeGreaterThan(0);
     expect(extraMounts.ports).toBeGreaterThan(0);
+  });
+
+  it("resolves cross-block reference links and footnotes after settlement", () => {
+    const md = [
+      "See the [specification][spec] and note[^1].",
+      "",
+      "Middle paragraph.",
+      "",
+      "[spec]: https://example.com/spec",
+      "[^1]: Footnote explanation.",
+    ].join("\n");
+
+    renderAgyLive(md, true);
+    renderAgyLive(md, false);
+
+    const link = host.querySelector<HTMLAnchorElement>('[data-answer] a[href="https://example.com/spec"]');
+    expect(link).not.toBeNull();
+    expect(link?.textContent).toBe("specification");
+    expect(host.querySelector("[data-answer]")?.textContent).toContain("Footnote explanation.");
+  });
+
+  it("flushes streaming throttle immediately when LatestAnswer switches to a distinct persisted item ID", () => {
+    vi.useFakeTimers();
+    try {
+      const baseUser: Item = { id: "14@u#0", seq: 14, role: "user", kind: "text", text: "Run checks", ts: "2026-11-26T00:00:00Z" };
+      const first: Item = { id: "15@a#text", seq: 15, role: "assistant", kind: "text", text: "Previous narration", ts: "2026-11-26T00:00:01Z" };
+      const second: Item = { id: "16@b#text", seq: 16, role: "assistant", kind: "text", text: "New reply", ts: "2026-11-26T00:00:02Z" };
+
+      renderItems([baseUser, first], true);
+      const ans1 = host.querySelector("[data-latest-text] [data-answer]");
+      expect(ans1?.getAttribute("data-items")).toBe("15@a#text");
+      expect(ans1?.textContent).toContain("Previous narration");
+
+      // Within the same throttle interval, replace latest persisted item with a distinct item ID.
+      renderItems([baseUser, first, second], true);
+      const ans2 = host.querySelector("[data-latest-text] [data-answer]");
+      expect(ans2?.getAttribute("data-items")).toBe("16@b#text");
+      expect(ans2?.textContent).toContain("New reply");
+      expect(ans2?.textContent).not.toContain("Previous narration");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

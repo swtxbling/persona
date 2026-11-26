@@ -1200,6 +1200,9 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     };
     const anchorDisclosure = (el: Element) => {
       drop();
+      stopGlide();
+      clearTimeout(landing.current?.quiet);
+      landing.current = null;
       clearTimeout(resume);
       const was = atEnd.current;
       atEnd.current = false;

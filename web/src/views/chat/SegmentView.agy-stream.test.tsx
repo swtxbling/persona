@@ -40,6 +40,7 @@ vi.mock("./LazyTurnExtras", () => ({
 }));
 
 const { SegmentView } = await import("./SegmentView");
+const { loadReplyImages } = await import("../../ui/reply-images-lazy");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -86,66 +87,80 @@ function renderAgyLive(text: string, live: boolean) {
 
 describe("SegmentView AGY in-place live text streaming", () => {
   it("streams in-place AGY text incrementally via StreamChunk, preserves <pre> DOM identity across settle, and gates reply probes until settle", async () => {
-    const chunk0 = "Intro paragraph.\n\n```ts\nconst a = 1;";
-    const chunk1 = "Intro paragraph.\n\n```ts\nconst a = 1;\nconst b = 2;\n```";
-    const chunk2 = `${chunk1}\n\nClosing paragraph.`;
+    vi.useFakeTimers();
+    try {
+      const chunk0 = "Intro paragraph.\n\n```ts\nconst a = 1;";
+      const chunk1 = "Intro paragraph.\n\n```ts\nconst a = 1;\nconst b = 2;\n```";
+      const chunk2 = `${chunk1}\n\nClosing paragraph.`;
 
-    renderAgyLive(chunk0, true);
-    expect(markdownCalls.at(-1)?.streaming).toBe(true);
-    expect(host.querySelector("[data-answer]")?.getAttribute("data-answer")).toBe("true");
-    expect(extraMounts.files).toBe(0);
-    expect(extraMounts.ports).toBe(0);
+      renderAgyLive(chunk0, true);
+      expect(markdownCalls.at(-1)?.streaming).toBe(true);
+      expect(host.querySelector("[data-answer]")?.getAttribute("data-answer")).toBe("true");
+      expect(extraMounts.files).toBe(0);
+      expect(extraMounts.ports).toBe(0);
 
-    const introP = host.querySelector("[data-answer] p");
-    const initialPre = host.querySelector("[data-answer] pre");
-    expect(introP).not.toBeNull();
-    expect(initialPre).not.toBeNull();
+      const introP = host.querySelector("[data-answer] p");
+      const initialPre = host.querySelector("[data-answer] pre");
+      expect(introP).not.toBeNull();
+      expect(initialPre).not.toBeNull();
+      expect(initialPre?.textContent).toContain("const a = 1;");
 
-    // Track destructive <pre> removals across in-place updates and settlement.
-    let preRemoved = 0;
-    const countRemovals = (muts: MutationRecord[]) => {
-      for (const m of muts) {
-        for (const n of m.removedNodes) {
-          if (n instanceof Element && (n.matches("pre, .code-block") || n.querySelector("pre, .code-block"))) {
-            preRemoved++;
+      // Track destructive <pre> removals across in-place updates and settlement.
+      let preRemoved = 0;
+      const countRemovals = (muts: MutationRecord[]) => {
+        for (const m of muts) {
+          for (const n of m.removedNodes) {
+            if (n instanceof Element && (n.matches("pre, .code-block") || n.querySelector("pre, .code-block"))) {
+              preRemoved++;
+            }
           }
         }
-      }
-    };
-    const mo = new MutationObserver(countRemovals);
-    mo.observe(host, { childList: true, subtree: true });
+      };
+      const mo = new MutationObserver(countRemovals);
+      mo.observe(host, { childList: true, subtree: true });
 
-    renderAgyLive(chunk1, true);
-    countRemovals(mo.takeRecords());
-    await Promise.resolve();
-    expect(markdownCalls.at(-1)?.streaming).toBe(true);
-    expect(host.querySelector("[data-answer] p")).toBe(introP);
-    expect(host.querySelector("[data-answer] pre")).toBe(initialPre);
-    expect(initialPre?.isConnected).toBe(true);
-    expect(preRemoved).toBe(0);
+      renderAgyLive(chunk1, true);
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      countRemovals(mo.takeRecords());
+      await Promise.resolve();
+      expect(markdownCalls.at(-1)?.streaming).toBe(true);
+      expect(host.querySelector("[data-answer] p")).toBe(introP);
+      expect(host.querySelector("[data-answer] pre")).toBe(initialPre);
+      expect(initialPre?.isConnected).toBe(true);
+      expect(initialPre?.textContent).toContain("const b = 2;");
+      expect(preRemoved).toBe(0);
 
-    renderAgyLive(chunk2, true);
-    countRemovals(mo.takeRecords());
-    await Promise.resolve();
-    expect(host.querySelector("[data-answer] p")).toBe(introP);
-    expect(host.querySelector("[data-answer] pre")).toBe(initialPre);
-    expect(initialPre?.isConnected).toBe(true);
-    expect(preRemoved).toBe(0);
-    expect(extraMounts.files).toBe(0);
-    expect(extraMounts.ports).toBe(0);
+      renderAgyLive(chunk2, true);
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      countRemovals(mo.takeRecords());
+      await Promise.resolve();
+      expect(host.querySelector("[data-answer] p")).toBe(introP);
+      expect(host.querySelector("[data-answer] pre")).toBe(initialPre);
+      expect(initialPre?.isConnected).toBe(true);
+      expect(host.querySelector("[data-answer]")?.textContent).toContain("Closing paragraph.");
+      expect(preRemoved).toBe(0);
+      expect(extraMounts.files).toBe(0);
+      expect(extraMounts.ports).toBe(0);
 
-    // Settle the turn (live: true -> false): keep chunk keys mounted so <pre> survives, and mount reply probes.
-    renderAgyLive(chunk2, false);
-    countRemovals(mo.takeRecords());
-    await Promise.resolve();
-    mo.disconnect();
-    expect(markdownCalls.at(-1)?.streaming).toBeUndefined();
-    expect(preRemoved).toBe(0);
-    expect(host.querySelector("[data-answer] p")).toBe(introP);
-    expect(host.querySelector("[data-answer] pre")).toBe(initialPre);
-    expect(initialPre?.isConnected).toBe(true);
-    expect(extraMounts.files).toBeGreaterThan(0);
-    expect(extraMounts.ports).toBeGreaterThan(0);
+      // Settle the turn (live: true -> false): keep chunk keys mounted so <pre> survives, and mount reply probes.
+      renderAgyLive(chunk2, false);
+      countRemovals(mo.takeRecords());
+      await Promise.resolve();
+      mo.disconnect();
+      expect(markdownCalls.at(-1)?.streaming).toBeUndefined();
+      expect(preRemoved).toBe(0);
+      expect(host.querySelector("[data-answer] p")).toBe(introP);
+      expect(host.querySelector("[data-answer] pre")).toBe(initialPre);
+      expect(initialPre?.isConnected).toBe(true);
+      expect(extraMounts.files).toBeGreaterThan(0);
+      expect(extraMounts.ports).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("resolves cross-block reference links and footnotes after settlement", () => {
@@ -165,6 +180,67 @@ describe("SegmentView AGY in-place live text streaming", () => {
     expect(link).not.toBeNull();
     expect(link?.textContent).toBe("specification");
     expect(host.querySelector("[data-answer]")?.textContent).toContain("Footnote explanation.");
+  });
+
+  it("resolves quoted reference links after live-to-settled transition", () => {
+    const md = [
+      "> [spec]: https://example.com/spec",
+      "",
+      "Middle paragraph.",
+      "",
+      "See [documentation][spec].",
+    ].join("\n");
+
+    renderAgyLive(md, true);
+    renderAgyLive(md, false);
+
+    const link = host.querySelector<HTMLAnchorElement>('[data-answer] a[href="https://example.com/spec"]');
+    expect(link).not.toBeNull();
+    expect(link?.textContent).toBe("documentation");
+  });
+
+  it("resolves multiline reference links after live-to-settled transition", () => {
+    const md = [
+      "See [the documentation][multi line].",
+      "",
+      "Middle paragraph.",
+      "",
+      "[multi",
+      "line]: https://example.com/spec",
+    ].join("\n");
+
+    renderAgyLive(md, true);
+    renderAgyLive(md, false);
+
+    const link = host.querySelector<HTMLAnchorElement>('[data-answer] a[href="https://example.com/spec"]');
+    expect(link).not.toBeNull();
+    expect(link?.textContent).toBe("the documentation");
+  });
+
+  it.each([2, 8])("merges %i blank-separated images into a single gallery after live-to-settled transition", async (count) => {
+    await loadReplyImages();
+    const md = Array.from({ length: count }, (_, i) => `![img${i + 1}](https://example.com/${i + 1}.png)`).join("\n\n");
+
+    renderAgyLive(md, true);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    renderAgyLive(md, false);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const settledGalleries = host.querySelectorAll("[data-answer] [data-reply-images]").length;
+    expect(settledGalleries).toBe(1);
+
+    // Compare against a cold settled mount of the exact same markdown.
+    act(() => root.unmount());
+    root = createRoot(host);
+    renderAgyLive(md, false);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(host.querySelectorAll("[data-answer] [data-reply-images]").length).toBe(settledGalleries);
   });
 
   it("flushes streaming throttle immediately when LatestAnswer switches to a distinct persisted item ID", () => {

@@ -8,7 +8,7 @@ const roCallbacks = vi.hoisted(() => new Set<ResizeObserverCallback>());
 
 vi.hoisted(() => {
   const g = globalThis as Record<string, unknown>;
-  g.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+  g.matchMedia = (q: string) => ({ matches: /pointer: fine|prefers-reduced-motion/.test(q), addEventListener() {}, removeEventListener() {} });
   g.ResizeObserver = class {
     private cb: ResizeObserverCallback;
     constructor(cb: ResizeObserverCallback) {
@@ -37,6 +37,14 @@ vi.mock("./useTranscript", () => ({ useTranscript: () => transcript }));
 vi.mock("../../lib/panel", async (importOriginal) => ({ ...(await importOriginal<typeof import("../../lib/panel")>()), usePanel: () => null }));
 vi.mock("../../lib/router", async (importOriginal) => ({ ...(await importOriginal<typeof import("../../lib/router")>()), useRoute: () => ({ name: "session", mid: "m", sid: "s" }) }));
 
+const nav = vi.hoisted(() => ({ onJump: null as ((lineId: string) => Promise<void>) | null }));
+vi.mock("./ChatNavRail", () => ({
+  ChatNavRail: (p: { onJump?: (lineId: string) => Promise<void> }) => {
+    nav.onJump = p.onJump ?? null;
+    return null;
+  },
+}));
+
 const { ChatView } = await import("./ChatView");
 const { reset, upsertSession } = await import("../../lib/store");
 const { forgetExpanded } = await import("./expanded");
@@ -62,6 +70,7 @@ beforeEach(() => {
   localStorage.clear();
   forgetExpanded();
   roCallbacks.clear();
+  nav.onJump = null;
   transcript.items = [...items];
   upsertSession({ machine_id: "m", session_id: "s", title: "AGY Anchor", status: "idle", state: "idle", agent: "antigravity", cwd: "/work" } as Session);
   vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } })));
@@ -239,5 +248,85 @@ describe("ChatView ThinkingRow disclosure scroll anchor", () => {
       for (const cb of roCallbacks) cb([], {} as ResizeObserver);
     });
     expect(sc.scrollTop).toBe(700);
+
+    // Drop the unfold anchor and re-engage atEnd, then re-expand via Space (keydown + synthesized click).
+    await act(async () => sc.dispatchEvent(new WheelEvent("wheel", { deltaY: 60, bubbles: true })));
+    sc.scrollTop = 1840;
+    await act(async () => sc.dispatchEvent(new Event("scroll", { bubbles: true })));
+    sc.scrollTop = 1900;
+    await act(async () => sc.dispatchEvent(new Event("scroll", { bubbles: true })));
+
+    wgBtn.focus();
+    await act(async () => {
+      wgBtn.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true, cancelable: true }));
+      wgBtn.click();
+    });
+    expect(wgBtn.getAttribute("aria-expanded")).toBe("true");
+
+    setScrollHeight(3400);
+    await act(async () => {
+      for (const cb of roCallbacks) cb([], {} as ResizeObserver);
+    });
+    expect(sc.scrollTop).toBe(1900);
+  });
+
+  it.each([
+    ["Enter", "Enter"],
+    [" ", "Space"],
+  ] as const)("cancels a competing held navigation landing on focused ThinkingRow %s activation", async (key, code) => {
+    transcript.items = [
+      ...items,
+      { id: "3@u#0", seq: 3, role: "user", kind: "text", text: "Later navigation target", ts: "2026-11-26T00:00:06Z" },
+      { id: "4@p#text", seq: 4, role: "assistant", kind: "text", text: "Later response", ts: "2026-11-26T00:00:07Z" },
+    ];
+    const { sc, row, setScrollHeight, setRowTop } = await mountWithOpenWorkGroup();
+    expect(nav.onJump).toBeTypeOf("function");
+
+    const target = host.querySelector<HTMLElement>('[data-line="seg:3@u#0"]')?.firstElementChild as HTMLElement;
+    expect(target).toBeTruthy();
+    let targetContentTop = 1400;
+    target.getBoundingClientRect = () => ({
+      top: targetContentTop - sc.scrollTop,
+      bottom: targetContentTop - sc.scrollTop + 28,
+      left: 0,
+      right: 800,
+      width: 800,
+      height: 28,
+      x: 0,
+      y: targetContentTop - sc.scrollTop,
+      toJSON() {},
+    });
+
+    // Retain focus on the disclosure while an asynchronous navigation jump resolves and holds a landing below it.
+    await act(async () => row.focus({ preventScroll: true }));
+    await act(async () => {
+      await nav.onJump!("seg:3@u#0");
+    });
+
+    const topBefore = sc.scrollTop;
+    setRowTop(900 - topBefore);
+    await act(async () => {
+      row.dispatchEvent(new KeyboardEvent("keydown", { key, code, bubbles: true, cancelable: true }));
+    });
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+
+    // Expansion pushes the old navigation target down while the disclosure header itself does not move.
+    targetContentTop += 300;
+    setScrollHeight(3400);
+    await act(async () => {
+      for (const cb of roCallbacks) cb([], {} as ResizeObserver);
+    });
+    expect(sc.scrollTop).toBe(topBefore);
+
+    // ArrowDown still cancels the disclosure anchor (reader movement).
+    await act(async () => {
+      row.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", bubbles: true, cancelable: true }));
+    });
+    setRowTop(900 - topBefore + 60);
+    setScrollHeight(3500);
+    await act(async () => {
+      for (const cb of roCallbacks) cb([], {} as ResizeObserver);
+    });
+    expect(sc.scrollTop).toBe(topBefore);
   });
 });

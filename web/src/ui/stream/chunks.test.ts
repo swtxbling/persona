@@ -35,6 +35,47 @@ describe("splitChunks", () => {
     expect(splitChunks("# A\n\ntext\n\nmore")).toHaveLength(3);
   });
 
+  it("detects quoted, list-nested, multiline, and footnote reference definitions outside code fences", () => {
+    expect(splitChunks("> [spec]: https://example.com/spec\n\nMiddle paragraph.\n\nSee [documentation][spec].")).toHaveLength(1);
+    expect(splitChunks("See [the documentation][multi line].\n\nMiddle paragraph.\n\n[multi\nline]: https://example.com/spec")).toHaveLength(1);
+    expect(splitChunks("> [multi\n> line]: https://example.com/spec\n\nMiddle paragraph.\n\nSee [docs][multi line].")).toHaveLength(1);
+    expect(splitChunks("- [spec]: https://example.com/spec\n\nMiddle paragraph.\n\nSee [docs][spec].")).toHaveLength(1);
+    expect(splitChunks("See note[^1].\n\nMiddle paragraph.\n\n[^1]: Footnote body.")).toHaveLength(1);
+
+    // Reference-like syntax inside fenced code blocks must NOT collapse unrelated chunks.
+    const fencedBackticks = "Intro.\n\n```md\n[example]: https://example.com\n```\n\nClosing.";
+    expect(splitChunks(fencedBackticks).map((x) => x.content)).toEqual([
+      "Intro.\n\n",
+      "```md\n[example]: https://example.com\n```\n\n",
+      "Closing.",
+    ]);
+    const fencedTildes = "Intro.\n\n~~~\n[example]: https://example.com\n~~~\n\nClosing.";
+    expect(splitChunks(fencedTildes).map((x) => x.content)).toEqual([
+      "Intro.\n\n",
+      "~~~\n[example]: https://example.com\n~~~\n\n",
+      "Closing.",
+    ]);
+    const plainCode = "Intro paragraph.\n\n```ts\nconst a = 1;\n```\n\nClosing paragraph.";
+    expect(splitChunks(plainCode).map((x) => x.start)).toEqual([0, 18, 42]);
+  });
+
+  it("keeps consecutive blank-separated image-only paragraphs in the same chunk while sealing surrounding blocks", () => {
+    expect(splitChunks("![a](https://example.com/a.png)\n\n![b](https://example.com/b.png)")).toHaveLength(1);
+    const eight = Array.from({ length: 8 }, (_, i) => `![img${i + 1}](https://example.com/${i + 1}.png)`).join("\n\n");
+    expect(splitChunks(eight)).toHaveLength(1);
+    expect(
+      splitChunks("**Kitchen**\n![a](https://x.test/a.png)\n\n![b](https://x.test/b.png)\nIt has a washer."),
+    ).toHaveLength(1);
+
+    const mixed = "Intro\n\n```ts\nconst a = 1;\n```\n\n![a](https://example.com/a.png)\n\n![b](https://example.com/b.png)\n\nClosing.";
+    expect(splitChunks(mixed).map((x) => x.content)).toEqual([
+      "Intro\n\n",
+      "```ts\nconst a = 1;\n```\n\n",
+      "![a](https://example.com/a.png)\n\n![b](https://example.com/b.png)\n\n",
+      "Closing.",
+    ]);
+  });
+
   it("a text without a blank line is one chunk", () => {
     expect(splitChunks("just one line")).toEqual([{ start: 0, content: "just one line" }]);
   });

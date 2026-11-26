@@ -3,14 +3,14 @@
 // growing end leaves open is touched, so half a delimiter doesn't flip the structure (and replay the fade) when its
 // other half arrives. Only while streaming; the finished text is rendered as written.
 
-import { closes, fenceRun, type Fence } from "./chunks";
+import { closes, scanFenceRun, type Fence } from "./chunks";
 
 // Whether the text ends inside a code fence (and with which), and the text outside fences.
 function scanFences(md: string): { open: Fence | null; outside: string } {
   let open: Fence | null = null;
   const outside: string[] = [];
   for (const line of md.split(/\r?\n/)) {
-    const run = fenceRun(line);
+    const run = scanFenceRun(line, open);
     if (run) open = !open ? run : closes(open, run) ? null : open;
     else if (!open) outside.push(line);
   }
@@ -88,7 +88,7 @@ export function repairStreamingMarkdown(md: string): string {
   if (!md) return md;
   const { open, outside } = scanFences(md);
   if (open) {
-    const marker = open.marker.repeat(open.length);
+    const marker = `${open.closingPrefix ?? ""}${open.marker.repeat(open.length)}`;
     return md.endsWith("\n") ? md + marker : `${md}\n${marker}`;
   }
   md = holdHalfRow(md);

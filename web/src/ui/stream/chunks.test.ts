@@ -59,6 +59,30 @@ describe("splitChunks", () => {
     expect(splitChunks(plainCode).map((x) => x.start)).toEqual([0, 18, 42]);
   });
 
+  it("keeps a legal reference after a list-contained fence in the whole-document parser root", () => {
+    const md = "See [documentation][spec].\n\nMiddle paragraph.\n\n- ```js\n  const example = 1;\n  ```\n\n[spec]: https://example.com/spec";
+    expect(splitChunks(md)).toEqual([{ start: 0, content: md }]);
+  });
+
+  it("ignores reference-looking lines inside list and blockquote fences", () => {
+    const fences = [
+      "- ```md\n  [spec]: https://example.com/spec\n  ```",
+      "> ```md\n> [spec]: https://example.com/spec\n> ```",
+      "- item\n\n  ```md\n  [spec]: https://example.com/spec\n  ```",
+    ];
+    for (const fence of fences) {
+      const md = `Intro.\n\n${fence}\n\nClosing.`;
+      expect(splitChunks(md).map((x) => x.content), fence).toEqual([`Intro.\n\n${fence}\n\n`, "Closing."]);
+    }
+
+    const containerLookingLines = "Intro.\n\n```md\n- ```\n> ```\n[spec]: https://example.com/spec\n```\n\nClosing.";
+    expect(splitChunks(containerLookingLines).map((x) => x.content)).toEqual([
+      "Intro.\n\n",
+      "```md\n- ```\n> ```\n[spec]: https://example.com/spec\n```\n\n",
+      "Closing.",
+    ]);
+  });
+
   it("keeps consecutive blank-separated image-only paragraphs in the same chunk while sealing surrounding blocks", () => {
     expect(splitChunks("![a](https://example.com/a.png)\n\n![b](https://example.com/b.png)")).toHaveLength(1);
     const eight = Array.from({ length: 8 }, (_, i) => `![img${i + 1}](https://example.com/${i + 1}.png)`).join("\n\n");
@@ -74,6 +98,33 @@ describe("splitChunks", () => {
       "![a](https://example.com/a.png)\n\n![b](https://example.com/b.png)\n\n",
       "Closing.",
     ]);
+  });
+
+  it("keeps balanced image destinations and quoted parenthesized titles in one gallery chunk", () => {
+    const examples = [
+      "![a](https://example.com/a(1).png)\n\n![b](https://example.com/b(2).png)",
+      '![a](https://example.com/a.png "one (first)")\n\n![b](https://example.com/b.png "two (second)")',
+      "![a](https://example.com/a\\(1\\).png)\n\n![b](https://example.com/b\\(2\\).png)",
+      "![a](<https://example.com/a(1).png> \"one (first)\")\n\n![b](<https://example.com/b(2).png> \"two (second)\")",
+      "![a](<https://example.com/a\\>1.png>)\n\n![b](<https://example.com/b\\>2.png>)",
+      "![a](https://example.com/nest(1(2)).png) ![b](https://example.com/b.png)\n\n![c](https://example.com/c.png 'three (third)')",
+    ];
+    for (const [index, md] of examples.entries()) {
+      expect(splitChunks(md), md).toEqual([{ start: 0, content: md }]);
+      const html = renderToStaticMarkup(createElement(ReactMarkdown, null, md));
+      expect(html.match(/<img/g) ?? [], md).toHaveLength(index === examples.length - 1 ? 3 : 2);
+    }
+  });
+
+  it("does not merge images with ordinary text or malformed image-looking paragraphs", () => {
+    const examples = [
+      "![a](https://example.com/a(1).png)\n\nOrdinary text.",
+      "![a](https://example.com/a(1).png) trailing\n\n![b](https://example.com/b(2).png)",
+      "![a](https://example.com/a(1).png\n\n![b](https://example.com/b(2).png)",
+      "![a](https://example.com/a(1.png)\n\n![b](https://example.com/b(2).png)",
+      "![a](<https://example.com/a(1).png)\n\n![b](https://example.com/b(2).png)",
+    ];
+    for (const md of examples) expect(splitChunks(md), md).toHaveLength(2);
   });
 
   it("a text without a blank line is one chunk", () => {

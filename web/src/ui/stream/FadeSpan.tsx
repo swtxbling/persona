@@ -7,7 +7,7 @@ import { useCallback, type AnimationEvent, type ComponentPropsWithoutRef, type C
 import type { Element } from "hast";
 import { scheduleSegment, type WordFadeState } from "./wordFade";
 
-type Props<T extends "span" | "li"> = ComponentPropsWithoutRef<T> & { node?: Element; fade: WordFadeState };
+type Props<T extends "span" | "li"> = ComponentPropsWithoutRef<T> & { node?: Element; fade: WordFadeState | null };
 
 const keyOf = (node?: Element) => (typeof node?.properties?.dataWfKey === "string" ? node.properties.dataWfKey : undefined);
 
@@ -18,17 +18,17 @@ function withoutDelay(style: CSSProperties | undefined, key?: string): CSSProper
   return Object.keys(rest).length ? rest : undefined;
 }
 
-function useFade(fade: WordFadeState, node: Element | undefined, animation: string) {
-  const key = keyOf(node);
-  const settled = Boolean(key && fade.timeline.settled.has(key));
+function useFade(fade: WordFadeState | null, node: Element | undefined, animation: string) {
+  const key = fade ? keyOf(node) : undefined;
+  const settled = Boolean(fade && key && fade.timeline.settled.has(key));
   const ref = useCallback(
     (el: HTMLElement | null) => {
-      if (el && key && !settled) scheduleSegment(fade, key, el);
+      if (el && fade && key && !settled) scheduleSegment(fade, key, el);
     },
     [fade, key, settled],
   );
   const onAnimationEnd = (e: AnimationEvent<HTMLElement>) => {
-    if (!key || e.target !== e.currentTarget || e.animationName !== animation) return;
+    if (!fade || !key || e.target !== e.currentTarget || e.animationName !== animation) return;
     fade.timeline.settled.add(key);
   };
   return { key, settled, ref, onAnimationEnd };

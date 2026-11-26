@@ -4,8 +4,10 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Element } from "hast";
+import type { PluggableList } from "unified";
 import { expect, it } from "vitest";
 import { FadeListItem, FadeSpan } from "./FadeSpan";
+import { StreamChunk } from "./Chunk";
 import { createWordFadeState } from "./wordFade";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -43,6 +45,42 @@ it("settles a word and a list dot at animationend without touching them; the nex
   draw();
   expect(span.hasAttribute("class")).toBe(false);
   expect(li.hasAttribute("data-stream-marker")).toBe(false);
+  act(() => root.unmount());
+  host.remove();
+});
+
+it("keeps a list-contained code block mounted when streaming fades into plain Markdown", () => {
+  const fade = createWordFadeState();
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const content = "- ```js\n  const example = 1;\n  ```";
+  const remarkPlugins: PluggableList = [];
+  const rehypePlugins: PluggableList = [];
+  const components = {};
+  const urlTransform = (url: string) => url;
+  const draw = (streaming: boolean) =>
+    act(() =>
+      root.render(
+        <StreamChunk
+          start={0}
+          content={content}
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={rehypePlugins}
+          components={components}
+          urlTransform={urlTransform}
+          fade={streaming ? fade : null}
+          plain={!streaming}
+          wholeDocument={false}
+        />,
+      ),
+    );
+  draw(true);
+  const pre = host.querySelector("pre");
+  expect(pre).not.toBeNull();
+  draw(false);
+  expect(host.querySelector("pre")).toBe(pre);
+  expect(pre?.isConnected).toBe(true);
   act(() => root.unmount());
   host.remove();
 });

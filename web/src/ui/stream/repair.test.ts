@@ -8,6 +8,15 @@ describe("repairStreamingMarkdown", () => {
     expect(repair("```\na\n```\ndone")).toBe("```\na\n```\ndone");
   });
 
+  it("recognizes list and blockquote containers when repairing fences", () => {
+    const closedList = "See [documentation][spec].\n\nMiddle paragraph.\n\n- ```js\n  const example = 1;\n  ```\n\n[spec]: https://example.com/spec";
+    expect(repair(closedList)).toBe(closedList);
+    expect(repair("> ```js\n> const example = 1;\n> ```")).toBe("> ```js\n> const example = 1;\n> ```");
+    expect(repair("- ```js\n  const example = 1;")).toBe("- ```js\n  const example = 1;\n  ```");
+    expect(repair("> ```js\n> const example = 1;")).toBe("> ```js\n> const example = 1;\n> ```");
+    expect(repair("```md\n- ```\nstill code\n```")).toBe("```md\n- ```\nstill code\n```");
+  });
+
   it("closes ** and * the growing line leaves open", () => {
     expect(repair("这是 **重要")).toBe("这是 **重要**");
     expect(repair("an *emph")).toBe("an *emph*");

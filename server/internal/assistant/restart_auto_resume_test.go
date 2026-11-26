@@ -497,6 +497,25 @@ func TestRestartAutoResumeRejectsNonRestartStopCausesAndUncompactableFullContext
 			sess: proto.Session{MachineID: "mac", SessionID: "s-nil-caps", Status: proto.StatusInterrupted},
 		},
 		{
+			name: "live_runtime_interrupted_stop_unknown",
+			sess: proto.Session{
+				MachineID:    "mac",
+				SessionID:    "s-t3-cancelled",
+				SourceKind:   "t3code",
+				Status:       proto.StatusInterrupted,
+				Capabilities: &proto.SessionCapabilities{Read: true, Send: true, StopCause: proto.StopUnknown},
+			},
+		},
+		{
+			name: "live_runtime_interrupted_nil_caps",
+			sess: proto.Session{
+				MachineID:  "mac",
+				SessionID:  "s-runtime-int-nil",
+				SourceKind: "opencode",
+				Status:     proto.StatusInterrupted,
+			},
+		},
+		{
 			name: "context_full_uncompactable",
 			sess: proto.Session{
 				MachineID:     "mac",
@@ -531,6 +550,16 @@ func TestRestartAutoResumeRejectsNonRestartStopCausesAndUncompactableFullContext
 	}
 	if len(res.RecoveredTodoIDs) != 0 || len(res.EscalatedTodoIDs) != 0 || len(sentToAgent(f)) != 0 || len(startCalls(f)) != 0 {
 		t.Fatalf("none of non-restart stop causes / uncompactable full contexts may be resumed: res=%+v sent=%+v starts=%+v", res, sentToAgent(f), startCalls(f))
+	}
+	// Stale old-epoch checkpoints skipped for terminal non-restart reasons (e.g. StopIdle, StopUnknown) must be cleared so they cannot linger across later restarts.
+	remaining, err := s.todoRecoveryStore().ListTodoRecoveryStates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range remaining {
+		if r.SessionID != "s-full-uncompactable" {
+			t.Fatalf("expected stale terminal-skipped checkpoint %s to be deleted, still present: %+v", r.SessionID, r)
+		}
 	}
 }
 

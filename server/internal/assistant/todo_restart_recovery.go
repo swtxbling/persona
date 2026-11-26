@@ -909,6 +909,9 @@ func (s *Service) runRestartRecoverySweepInternal(
 			return result, err
 		}
 		if !ok || t.DoneAt != nil || t.CancelledAt != nil || t.Cancelled() || !isSupervisedRecoverableTodo(t) {
+			if hubRestart && rec.RecoveryAttempts == 0 {
+				_ = st.DeleteTodoRecoveryState(ctx, rec.TodoID)
+			}
 			s.logf("restart_auto_resume action=skipped todo=%s machine=%s session=%s cycle=%s reason=task_not_recoverable",
 				rec.TodoID, rec.MachineID, rec.SessionID, currentBootEpoch)
 			result.SkippedTodoIDs = append(result.SkippedTodoIDs, rec.TodoID)
@@ -988,6 +991,9 @@ func (s *Service) runRestartRecoverySweepInternal(
 
 		// Guard 6: archived sessions must never be woken.
 		if s.isSessionArchived(rec.MachineID, rec.SessionID, sess) {
+			if hubRestart && rec.RecoveryAttempts == 0 {
+				_ = st.DeleteTodoRecoveryState(ctx, rec.TodoID)
+			}
 			s.logf("restart_auto_resume action=skipped todo=%s machine=%s session=%s cycle=%s reason=archived",
 				rec.TodoID, rec.MachineID, rec.SessionID, currentBootEpoch)
 			result.SkippedTodoIDs = append(result.SkippedTodoIDs, rec.TodoID)
@@ -1007,6 +1013,9 @@ func (s *Service) runRestartRecoverySweepInternal(
 		interrupted, skipReason := isRestartInterruptedSession(t, sess, hubRestart)
 		if !interrupted {
 			if hubRestart {
+				if isTerminalRecoverySkipReason(skipReason) && rec.RecoveryAttempts == 0 {
+					_ = st.DeleteTodoRecoveryState(ctx, rec.TodoID)
+				}
 				s.logf("restart_auto_resume action=skipped todo=%s machine=%s session=%s cycle=%s reason=%s",
 					rec.TodoID, rec.MachineID, rec.SessionID, currentBootEpoch, skipReason)
 			}
@@ -1320,15 +1329,30 @@ func isRestartInterruptedSession(t Todo, sess proto.Session, hubRestart bool) (b
 		return false, "not_node_restart_interrupted"
 	}
 	switch status {
-	case proto.StatusIdle, proto.StatusDone, proto.StatusInterrupted:
+	case proto.StatusIdle, proto.StatusDone:
 		return true, ""
-	case proto.StatusOffline:
+	case proto.StatusInterrupted, proto.StatusOffline:
+		// Both terminal (stoppedAgent) and non-terminal (SourceKind != "") interrupted/offline
+		// sessions require explicit StopRestart provenance so user cancellations (e.g. T3 Code
+		// cancelled -> StatusInterrupted with StopUnknown) are never falsely resumed.
 		if sess.Capabilities != nil && sess.Capabilities.StopCause == proto.StopRestart {
 			return true, ""
 		}
-		return false, "offline_status"
+		return false, "interrupted_without_restart_cause"
 	default:
 		return false, "unsupported_status_" + status
+	}
+}
+
+func isTerminalRecoverySkipReason(reason string) bool {
+	if strings.HasPrefix(reason, "stop_cause_") {
+		return true
+	}
+	switch reason {
+	case "concluded", "stopped_without_restart_cause", "interrupted_without_restart_cause", "auth_error":
+		return true
+	default:
+		return false
 	}
 }
 

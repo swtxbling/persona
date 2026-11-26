@@ -258,13 +258,14 @@ describe("NewMainDialog transitions, 409 main_changed, and unmount/ABA races", (
       startGate.reject(new ApiError(409, "main changed", { code: "main_changed" }));
       await Promise.resolve();
     });
-    await flush();
-    expect(refresh).toHaveBeenCalledTimes(1);
-    expect(forgetCleared).toHaveBeenCalledTimes(1);
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(navigateMain).toHaveBeenCalledTimes(1);
-    expect(onNavigate).toHaveBeenCalledTimes(1);
-    expect(notify).toHaveBeenCalledWith(t("assistant-assistantchat.new_main_elsewhere"), "info");
+    await vi.waitFor(() => {
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(forgetCleared).toHaveBeenCalledTimes(1);
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(navigateMain).toHaveBeenCalledTimes(1);
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+      expect(notify).toHaveBeenCalledWith(t("assistant-assistantchat.new_main_elsewhere"), "info");
+    });
   });
 
   it("fences stale NewMainDialog resolution after unmount and after scopeKey ABA bursts", async () => {
@@ -363,22 +364,26 @@ describe("NewMainDialog transitions, 409 main_changed, and unmount/ABA races", (
     )!;
     await act(async () => {
       newMainItem.click();
-      await Promise.resolve();
     });
-    await flush();
-    const confirmBtn = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) =>
-      b.textContent?.includes(t("assistant-assistantchat.new_main")),
-    )!;
+    let confirmBtn: HTMLButtonElement | undefined;
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await Promise.resolve();
+      });
+      confirmBtn = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) =>
+        b.textContent?.includes(t("assistant-assistantchat.new_main")),
+      );
+      expect(confirmBtn).toBeDefined();
+    });
     await act(async () => {
-      confirmBtn.click();
-      await Promise.resolve();
+      confirmBtn!.click();
     });
-    await flush();
-
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(navigateMain).toHaveBeenCalledTimes(1);
-    expect(onNavigate).toHaveBeenCalledTimes(1);
-    expect(notify).toHaveBeenCalledWith(t("assistant-assistantchat.new_main_elsewhere"), "info");
+    await vi.waitFor(() => {
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(navigateMain).toHaveBeenCalledTimes(1);
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+      expect(notify).toHaveBeenCalledWith(t("assistant-assistantchat.new_main_elsewhere"), "info");
+    });
   });
 });
 

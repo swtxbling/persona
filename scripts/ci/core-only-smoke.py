@@ -15,7 +15,9 @@ PERSONA_HOME) is read. The hub starts the persona-manager beside it, as an insta
   subcommand of personad and persona-manager (usage, exit 2), its built-in extension is not in /api/v1/extensions, and
   that extension's route (/api/v1/extensions/<id>/-/assistant-data) answers 404;
 - every device command a module's node half provides (commandport.AddCommand in server/internal/modules/all/node) is
-  an unknown subcommand of personad and persona-node, and their usage does not list it;
+  an unknown subcommand of personad and persona-node, and their usage does not list it. `iphone` is the explicit
+  compatibility exception: it stays listed, fails closed with exit 1 when no installed launcher exists, and its
+  compatibility registration does not provide a built-in node capability;
 - every connector a module registers on every hub (its port provided in server/internal/modules/all, ALWAYS_CONNECTORS)
   is not in /api/v1/connectors?all=1, and its route (/api/v1/connectors/<id>/auth) answers 404;
 - every built-in extension a connector module adds (MODULE_EXTENSIONS) is not in /api/v1/extensions, and the routes
@@ -115,10 +117,43 @@ def module_programs():
                        by_module("internal/modules/all", r'builtinext\.AddProgram\([^"]*"([^"]+)"'))
 
 
+# Only these device commands intentionally remain as compatibility entry points when their module is excluded.
+# They are not built-in node capabilities; the excluded provider port is checked by the node package tests too.
+COMPAT_DEVICE_COMMANDS = frozenset({"iphone"})
+
+
+def compat_device_commands():
+    """The device commands whose own build file explicitly includes persona_core_only."""
+    out = set()
+    for _, text in root_files("internal/modules/all/node"):
+        build = re.search(r"^//go:build (.*)$", text, re.M)
+        if not build or "!persona_core_only" in build.group(1) or "persona_core_only" not in build.group(1):
+            continue
+        out.update(re.findall(r'commandport\.AddCommand\([^"]*"([^"]+)"', text))
+    return out
+
+
 def node_commands():
-    """The device commands the modules' node halves provide: commandport.AddCommand("<name>", …) in modules/all/node."""
-    return calls_found("internal/modules/all/node", "commandport.AddCommand",
-                       by_module("internal/modules/all/node", r'commandport\.AddCommand\([^"]*"([^"]+)"'))
+    """The device commands, allowing only an explicit compatibility command to have a second registration."""
+    root = "internal/modules/all/node"
+    found = by_module(root, r'commandport\.AddCommand\([^"]*"([^"]+)"')
+    calls = sum(text.count("commandport.AddCommand(") for _, text in root_files(root))
+    names = sum(len(n) for n in found.values())
+    seen = set()
+    extra_compat = 0
+    for module, text in root_files(root):
+        for name in re.findall(r'commandport\.AddCommand\([^"]*"([^"]+)"', text):
+            key = (module, name)
+            if key in seen:
+                if name not in COMPAT_DEVICE_COMMANDS:
+                    raise Failed(f"{root}: duplicate non-compatibility command {name}")
+                extra_compat += 1
+            seen.add(key)
+    if calls - extra_compat != names:
+        raise Failed(f"{root}: {calls} calls of commandport.AddCommand, {names} read: update the smoke's pattern")
+    if compat_device_commands() != set(COMPAT_DEVICE_COMMANDS):
+        raise Failed(f"{root}: compatibility commands {sorted(compat_device_commands())}, want {sorted(COMPAT_DEVICE_COMMANDS)}")
+    return found
 
 
 # The connector modules whose connector the manager registers on every hub, unconfigured too: the port the composition
@@ -336,17 +371,24 @@ def subcommands(bindir, full, programs):
                   f"{prog} {name}: the usage still lists the module's program")
 
 
-def device_commands(bindir, full, commands):
-    """A node half's device command is a subcommand of personad and persona-node only when the module is built in."""
+def device_commands(bindir, full, commands, home):
+    """A module's device command is absent except for the explicit core-only compatibility entries."""
+    env = None if full else {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home),
+                             "PERSONA_HOME": str(home), "PERSONA_IPHONE_PROVIDER_LAUNCHER": ""}
     for prog in ("personad", "persona-node"):
-        usage = run([str(bindir / prog), "no-such-command"], 30, stdin=subprocess.DEVNULL)
+        usage = run([str(bindir / prog), "no-such-command"], 30, stdin=subprocess.DEVNULL, env=env)
         for name in commands:
             listed = re.search(rf"\b(personad|persona-node) {re.escape(name)}\b", usage.stdout + usage.stderr)
             if full:
                 check(listed, f"{prog}'s usage lacks {name}")
                 continue
+            if name in COMPAT_DEVICE_COMMANDS:
+                check(listed, f"{prog}'s usage lacks compatibility command {name}")
+                r = run([str(bindir / prog), name], 30, stdin=subprocess.DEVNULL, env=env)
+                check(r.returncode == 1, f"{prog} {name}: exit {r.returncode}, want 1 (missing installed launcher)")
+                continue
             check(not listed, f"{prog}'s usage still lists the module's command {name}")
-            r = run([str(bindir / prog), name], 30, stdin=subprocess.DEVNULL)
+            r = run([str(bindir / prog), name], 30, stdin=subprocess.DEVNULL, env=env)
             check(r.returncode == 2, f"{prog} {name}: exit {r.returncode}, want 2 (unknown subcommand)")
 
 
@@ -505,7 +547,7 @@ def main():
         build("" if default else "persona_core_only", bindir)
         print(f"built {', '.join(PROGRAMS)} ({'default' if default else 'core-only'}) in {time.monotonic() - started:.0f}s", flush=True)
         subcommands(bindir, default, flat(programs))
-        device_commands(bindir, default, flat(commands))
+        device_commands(bindir, default, flat(commands), home)
         database = postgres(container)
         port, token = free_port(), secrets.token_hex(24)
         write_hub_json(home, port, token, database)
@@ -554,7 +596,7 @@ def main():
               f"{', '.join(flat(programs, gone)) or 'none'}, connectors {', '.join(flat(connectors, gone)) or 'none'}, "
               f"extensions {', '.join(flat(module_exts, gone)) or 'none'}, routes "
               f"{', '.join(MODULE_ROUTES[i] for i in gone if i in MODULE_ROUTES) or 'none'}), node commands "
-              f"{'present' if default else 'absent'} ({', '.join(flat(commands)) or 'none'}), stored recordings listed, "
+              f"{'present' if default else 'module commands absent; compatibility commands present and fail-closed'} ({', '.join(flat(commands)) or 'none'}), stored recordings listed, "
               f"opened and found{'' if a.full else ', files unchanged without the recording module'}, clean shutdown "
               f"({time.monotonic() - started:.0f}s)")
         return 0

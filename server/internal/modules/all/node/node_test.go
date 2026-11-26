@@ -36,13 +36,14 @@ func TestScreenShareFollowsTheBuildTags(t *testing.T) {
 	}
 }
 
-// The iphone program and `personad iphone` come from the phone-extra module exactly when the build tags keep it.
+// The iphone node program comes from phone-extra exactly when the build tags keep it. The device CLI remains in
+// excluded builds too: phoneextra_compat.go forwards it to an explicitly installed provider (#16269).
 func TestPhoneExtraFollowsTheBuildTags(t *testing.T) {
 	want := slices.Contains(want, "phone-extra")
 	if got := iphoneport.Get(moduleswitch.Set{}) != nil; got != want {
 		t.Fatalf("the iphone program provided to the node: %v, want %v for this build's tags", got, want)
 	}
-	if _, got := commandport.LookupCommand("iphone"); got != want {
-		t.Fatalf("personad iphone provided: %v, want %v for this build's tags", got, want)
+	if _, got := commandport.LookupCommand("iphone"); !got {
+		t.Fatal("personad iphone is not provided by either the original module or its compatibility entry")
 	}
 }

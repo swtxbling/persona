@@ -1,6 +1,7 @@
 package iphone
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -65,5 +66,53 @@ func TestStoreListSkipsIncomplete(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(s.Dir, "stray.txt"), nil, 0o600)
 	if list, err := s.List(); err != nil || len(list) != 0 {
 		t.Fatalf("List = %+v, %v", list, err)
+	}
+}
+
+func TestStoreForgetOnlyRemovesTarget(t *testing.T) {
+	s := Store{Dir: filepath.Join(t.TempDir(), "phone")}
+	target, other := "00000000-TESTPHONE0001", "00000000-TESTPHONE0002"
+	for _, id := range []string{target, other} {
+		if err := s.Save(Record{UDID: id, Name: "Existing " + id, PairedAt: time.Unix(1, 0).UTC()}); err != nil {
+			t.Fatal(err)
+		}
+		path, err := s.RecordPath(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("opaque pairing for "+id), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	beforeMeta, err := os.ReadFile(filepath.Join(s.Dir, other, metaFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforePairing, err := os.ReadFile(filepath.Join(s.Dir, other, RecordFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // forgetting an already forgotten target must not broaden into a store reset either
+		if err := s.Forget(target); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(s.Dir, target)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("target still exists: %v", err)
+		}
+		afterMeta, err := os.ReadFile(filepath.Join(s.Dir, other, metaFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		afterPairing, err := os.ReadFile(filepath.Join(s.Dir, other, RecordFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(afterMeta, beforeMeta) || !bytes.Equal(afterPairing, beforePairing) {
+			t.Fatal("forget changed the other phone's metadata or pairing record")
+		}
+	}
+	list, err := s.List()
+	if err != nil || len(list) != 1 || list[0].UDID != other {
+		t.Fatalf("List = %+v, %v; want only the other phone", list, err)
 	}
 }

@@ -13,6 +13,37 @@ Code: `server/internal/modules/phone-extra/iphone` (records, Bonjour, sessions, 
 > a sleeping phone's Wi-Fi behaves were tested only against a fake bridge and a Bonjour service registered on a Mac.
 > Remove this note once someone has paired a real iPhone and driven it over Wi-Fi.
 
+## Installed-provider CLI compatibility (#16269)
+
+The default build is unchanged: `phoneextra.go` still registers the original in-process node provider and runs
+`personad iphone` through `iphone.Command`. When `persona_without_phone_extra` or `persona_core_only` leaves that module
+out, `phoneextra_compat.go` instead retains only the old `personad iphone` / `persona-node iphone` command as a
+compatibility entry. It does not register the built-in node capability.
+
+That entry executes the installed provider directly, with no shell, and passes through the original arguments, stdin,
+stdout, stderr and exit status. Cancelling the command kills the provider's process group. The launcher is selected only
+from:
+
+1. `PERSONA_IPHONE_PROVIDER_LAUNCHER`, an explicit absolute-path override for tests or operations; or
+2. `<PERSONA_HOME>/node-plugins/iphone/bin/persona-iphone-provider` (`.exe` on Windows), the stable location for the
+   public `iphone` extension. Creating and removing that stable link is part of the installed node provider lifecycle
+   in #16256; this PR only fails closed when the lifecycle has not installed it.
+
+There is no PATH search, automatic installation or automatic enablement. A missing, non-executable or unstartable
+launcher reports an error and exits 1. The child gets a minimal location/locale/network environment plus `PERSONA_HOME`
+and the non-secret `PERSONA_IPHONE_BRIDGE` / `PERSONA_IPHONE_DDI_DIR` path overrides needed by the original bridge and
+Prepare behavior. It does not inherit pairing secrets, hub tokens or database credentials, and the compatibility wrapper
+never logs the command's arguments.
+
+The compatibility wrapper never opens or writes `device.json` or `pairing.record`. A missing launcher, a provider error
+and a cancelled call therefore leave existing pairing bytes untouched. Any successful pair, forget or other state change
+is the installed provider's explicit operation, not a side effect of forwarding. Existing `Store.Forget` semantics stay
+scoped to the named phone: repeated removal of that target never clears another phone's record.
+
+This first compatibility step does **not** implement #16256's provider registration, selection, revocation or rollback
+lifecycle, change the manifest schema or package a marketplace extension. Its process tests use a fake installed provider;
+no physical iPhone has been verified.
+
 ## Pairing once over USB
 
 ```sh

@@ -966,7 +966,7 @@ func TestTodoContextHandoffPlanContinuationOrderingGuards(t *testing.T) {
 			t.Fatalf("expected permission escalation refusal when omitted launcher resolves to codex, got: %v", err)
 		}
 
-		// Omitted permission & launcher must wait for owner approval and preserve predecessor permission.
+		// Omitted permission & launcher preserve predecessor permission and use the supervisor's direct release.
 		okArgs, _ := json.Marshal(map[string]any{
 			"tasks": []map[string]any{{
 				"title":          "Continue via omitted launcher",
@@ -983,12 +983,15 @@ func TestTodoContextHandoffPlanContinuationOrderingGuards(t *testing.T) {
 		if err != nil {
 			t.Fatalf("toolTaskPlan: %v", err)
 		}
-		if !strings.Contains(planRes, "nothing has started") {
-			t.Fatalf("cross-provider continuation with omitted launcher auto-started without owner approval: %s", planRes)
+		if !strings.Contains(planRes, "without asking") {
+			t.Fatalf("cross-provider supervisor continuation did not use its direct release: %s", planRes)
 		}
 		plan, err := e.s.loadPlan(ctx, planIDRe.FindString(planRes))
 		if err != nil {
 			t.Fatalf("loadPlan: %v", err)
+		}
+		if plan.State != planStarted {
+			t.Fatalf("omitted-launcher plan state = %q, want started", plan.State)
 		}
 		if plan.Tasks[0].HandoffOperationID == "" {
 			t.Fatalf("expected HandoffOperationID on resolved provider switch: %+v", plan.Tasks[0])
@@ -1047,14 +1050,14 @@ func TestTodoContextHandoffPlanContinuationOrderingGuards(t *testing.T) {
 		if err != nil {
 			t.Fatalf("toolTaskPlan: %v", err)
 		}
-		if !strings.Contains(planRes, "nothing has started") {
-			t.Fatalf("swapped-launcher continuation auto-started without owner approval: %s", planRes)
+		if !strings.Contains(planRes, "without asking") {
+			t.Fatalf("swapped-launcher supervisor continuation did not use its direct release: %s", planRes)
 		}
 		plan, err := e.s.loadPlan(ctx, planIDRe.FindString(planRes))
 		if err != nil {
 			t.Fatalf("loadPlan: %v", err)
 		}
-		if plan.Tasks[0].Launcher != "codex" || plan.Tasks[0].HandoffOperationID == "" || plan.Tasks[0].Permission != "default" {
+		if plan.State != planStarted || plan.Tasks[0].Launcher != "codex" || plan.Tasks[0].HandoffOperationID == "" || plan.Tasks[0].Permission != "default" {
 			t.Fatalf("unexpected swapped plan task: %+v", plan.Tasks[0])
 		}
 	})
@@ -1114,14 +1117,14 @@ func TestTodoContextHandoffPlanContinuationOrderingGuards(t *testing.T) {
 		if err != nil {
 			t.Fatalf("toolTaskPlan: %v", err)
 		}
-		if !strings.Contains(planRes, "nothing has started") {
-			t.Fatalf("health-detoured continuation auto-started without owner approval: %s", planRes)
+		if !strings.Contains(planRes, "without asking") {
+			t.Fatalf("health-detoured supervisor continuation did not use its direct release: %s", planRes)
 		}
 		plan, err := e.s.loadPlan(ctx, planIDRe.FindString(planRes))
 		if err != nil {
 			t.Fatalf("loadPlan: %v", err)
 		}
-		if plan.Tasks[0].Machine != "box2" || plan.Tasks[0].HandoffOperationID == "" || plan.Tasks[0].Permission != "default" {
+		if plan.State != planStarted || plan.Tasks[0].Machine != "box2" || plan.Tasks[0].HandoffOperationID == "" || plan.Tasks[0].Permission != "default" {
 			t.Fatalf("unexpected detoured plan task: %+v", plan.Tasks[0])
 		}
 	})

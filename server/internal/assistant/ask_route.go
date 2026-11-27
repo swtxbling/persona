@@ -147,14 +147,8 @@ func userScreen(ix proto.Interaction) string {
 	if d.Risk == screen.RiskDelete {
 		return "may delete files (" + clip(oneLine(d.Warning), 80) + ")"
 	}
-	text := strings.ToLower(strings.Join([]string{d.Question, d.Command, d.Description}, "\n"))
-	var hit []string
-	for _, w := range userApprovalWords {
-		if strings.Contains(text, w) {
-			hit = append(hit, w)
-		}
-	}
-	if len(hit) > 0 {
+	text := strings.Join([]string{d.Question, d.Command, d.Description, d.Warning}, "\n")
+	if hit := approvalWordHits(text, userApprovalWords, userApprovalExtraWords, userApprovalInflectedWords); len(hit) > 0 {
 		return fmt.Sprintf("would send, reply or comment in the user's name, spend money or delete (%s)", strings.Join(hit, ", "))
 	}
 	return ""
@@ -195,7 +189,7 @@ func routable(ix proto.Interaction) bool {
 	}
 	switch ix.Kind {
 	case proto.IxQuestion:
-		return len(ix.Questions) > 0 && ix.ToolName != "ask_user" && asksForInput(ix)
+		return len(ix.Questions) > 0 && ix.ToolName != "ask_user" && ix.Delegate == nil && asksForInput(ix) && userApproval(ix) == ""
 	case proto.IxPermission, proto.IxPlan:
 		return true
 	case proto.IxScreen:
@@ -502,13 +496,14 @@ func (s *Service) ringAsks(todo string, ids []string, d *proto.Delegate, esc esc
 	s.fleet.mu.Lock()
 	for _, id := range ids {
 		p := s.fleet.interactions[id]
-		if p == nil || p.claimed || p.told {
+		if p == nil || p.claimed || p.told && !firstHeldNonOwner(p) {
 			continue
 		}
 		if p.route != nil && p.route.maybeTold {
 			maybeTold[id] = true
 		}
 		p.route = nil
+		p.heldNonOwner = false
 		p.ix.Delegating = false
 		if esc.level != "" {
 			p.ix.PushLevel = esc.level
@@ -564,9 +559,17 @@ func (s *Service) ringAsks(todo string, ids []string, d *proto.Delegate, esc esc
 	return list
 }
 
-// waitingCards are the pending cards of task t's agents the user has not been told of: held by a supervisor, or put
-// back on the apps after a restart without a route (its task is not supervised any more).
-func (s *Service) waitingCards(t Todo, terminalOnly bool) []string {
+// firstHeldNonOwner reports whether p is still on the first held route created by handNonOwnerCard. Its P1 Needs you
+// presentation already marked it told, but it has not been escalated yet. ringAsks clears both this state and route;
+// an actual earlier escalation, whose route is gone, remains ineligible for a duplicate push. Callers hold fleet.mu.
+func firstHeldNonOwner(p *pending) bool {
+	return p != nil && p.heldNonOwner && p.route != nil && p.route.parked && p.route.todo == "" && p.ix.PushLevel == assistantwire.LevelP1
+}
+
+// waitingCards are the pending cards of task t's agents that can still be handed to the user: held by a supervisor,
+// put back on the apps after a restart without a route, or on their first non-owner P1 route awaiting one explicit
+// escalation. Already escalated owner cards are not waiting again.
+func (s *Service) waitingCards(t Todo, terminalOnly, allowFirstHeld bool) []string {
 	agents := map[[2]string]bool{}
 	for _, a := range t.Agents {
 		if a.ReleasedAt == nil && a.DismissedAt == nil {
@@ -577,10 +580,13 @@ func (s *Service) waitingCards(t Todo, terminalOnly bool) []string {
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()
 	for id, p := range s.fleet.interactions {
-		if terminalOnly && p.ix.Kind != proto.IxScreen || p.ix.Kind == proto.IxScreen && p.route == nil {
+		firstHeld := allowFirstHeld && firstHeldNonOwner(p)
+		// A first held non-owner card stays eligible for one explicit escalation even without leaders, where the
+		// legacy route permits only terminal questions. All other kinds keep the established terminalOnly restriction.
+		if terminalOnly && p.ix.Kind != proto.IxScreen && !firstHeld || p.ix.Kind == proto.IxScreen && p.route == nil {
 			continue
 		}
-		if p.claimed || p.told || !routable(p.ix) || p.route == nil && p.ix.Delegating {
+		if p.claimed || p.told && !firstHeld || !routable(p.ix) || p.route == nil && p.ix.Delegating {
 			continue // the user's already, or the assistant deciding on it for them (fleet_delegate.go): it tells the user itself
 		}
 		mid := p.ix.MachineID
@@ -653,7 +659,7 @@ func (s *Service) toolAskEscalate(ctx context.Context, self string, args json.Ra
 		}
 		terminalOnly = true // The conversation above a worker's leader can escalate only its routed terminal question.
 	}
-	ids := s.waitingCards(t, terminalOnly)
+	ids := s.waitingCards(t, terminalOnly, len(s.settings(ctx).Leaders) == 0)
 	if len(ids) == 0 {
 		return "", fmt.Errorf("task %s has no card waiting that the user has not been told of", t.ID)
 	}
@@ -728,6 +734,28 @@ func (s *Service) askAnswered(ctx context.Context, todo, self string, ix proto.I
 // merging and deploying are not among them: those are the supervisor's within the task the user asked for.
 var userApprovalWords = []string{"发消息", "回复", "评论", "comment", "send", "发送", "删除", "delete", "购买", "付费", "续费", "充值"} // i18n-ignore: matched against the card
 
+// userApprovalExtraWords cover the same decision rights when the action is described in text rather than in a tool
+// name. English words are matched at word boundaries: an identifier such as "sender" or "commentary" is not an
+// outward action. The existing userApprovalWords list remains the shared riskyWords subset checked by older tests.
+var userApprovalExtraWords = []string{"reply", "forward", "publish", "share", "invite", "buy", "purchase", "pay", "charge",
+	"irreversible", "cannot be undone", "can't be undone", "不可撤销", "无法恢复"} // i18n-ignore: matched against the card
+
+// userApprovalInflectedWords are explicit common forms of the free-text action words above. The old substring match
+// covered these forms; whole-identifier boundaries must not lose sending/commenting/deleting/paying, while names such
+// as sender, commentary and sending_status stay non-matches. React is deliberately absent: only a structured react
+// tool action is outward, an ordinary React/Vue discussion is not.
+var userApprovalInflectedWords = []string{
+	"sending", "sends", "commenting", "comments", "commented", "deleting", "deletes", "deleted", "paying", "pays",
+	"replying", "replies", "forwarding", "forwards", "forwarded", "publishing", "publishes", "published", "sharing", "shares", "shared",
+	"inviting", "invites", "invited", "buying", "buys", "purchasing", "purchases", "purchased", "charging", "charges", "charged",
+} // i18n-ignore: matched against the card
+
+// ownerPresenceWords describe an in-person secret or verification action even when a caller forgot to set Secret or
+// Fields. They are deliberately phrases, not bare "password" or "login", so a discussion about authentication is not
+// automatically made owner-only.
+var ownerPresenceWords = []string{"enter password", "input password", "type password", "enter your password", "verification code", "one-time code",
+	"输入密码", "输入验证码", "扫码登录", "本人到场", "本人操作"} // i18n-ignore: matched against the card
+
 // userApprovalActionVerbs are tool-name verbs, normalized by connector.WriteVerb, that delete or spend even when the
 // payload has no risk word. Outward verbs use the connector gate's existing list (outboundVerbs in card_layers.go).
 var userApprovalActionVerbs = []string{"delete", "remove", "destroy", "erase", "purge", "trash", "buy", "purchase", "pay", "charge"}
@@ -766,17 +794,93 @@ func localFileEditPermission(ix proto.Interaction) bool {
 	return false
 }
 
-// userApproval says why permission or plan card ix is the user's to allow, not its supervisor's ("" when the
+// sourceFilenameSuffix reports whether the text after a matched action word makes it a source-code filename,
+// such as send.go or delete.go. Punctuation elsewhere still separates action words normally.
+func sourceFilenameSuffix(text string) bool {
+	for _, ext := range []string{".go", ".py", ".js", ".jsx", ".ts", ".tsx", ".rs", ".swift", ".kt", ".java",
+		".c", ".cc", ".cpp", ".h", ".hpp", ".rb", ".php", ".cs", ".m", ".mm", ".sh"} {
+		if strings.HasPrefix(text, ext) && (len(text) == len(ext) || !asciiWordByte(text[len(ext)])) {
+			return true
+		}
+	}
+	return false
+}
+
+// approvalWordInText matches an English risk word only at ASCII identifier boundaries: letters, digits and underscore
+// continue an identifier. Other punctuation remains a separator, so "send-to" still matches while "send_to" does not.
+// Non-ASCII risk words retain the existing substring behavior because Chinese text does not use spaces between words.
+func approvalWordInText(text, word string) bool {
+	if word == "" {
+		return false
+	}
+	for _, r := range word {
+		if r > 127 {
+			return strings.Contains(text, word)
+		}
+	}
+	for from := 0; from <= len(text)-len(word); {
+		i := strings.Index(text[from:], word)
+		if i < 0 {
+			return false
+		}
+		i += from
+		end := i + len(word)
+		beforeWord := i > 0 && asciiWordByte(text[i-1])
+		afterWord := end < len(text) && asciiWordByte(text[end])
+		if !beforeWord && !afterWord && !sourceFilenameSuffix(text[end:]) {
+			return true
+		}
+		from = i + 1
+	}
+	return false
+}
+
+func asciiWordByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_'
+}
+
+func approvalWordHits(text string, words ...[]string) []string {
+	text = strings.ToLower(text)
+	var hits []string
+	for _, group := range words {
+		for _, word := range group {
+			if approvalWordInText(text, word) && !slices.Contains(hits, word) {
+				hits = append(hits, word)
+			}
+		}
+	}
+	return hits
+}
+
+// approvalText includes the question and its choices as well as the permission fields. A question can itself ask for
+// an outward, paid or irreversible decision; only looking at ToolInput would incorrectly hand that decision to a
+// supervisor or the delegate.
+func approvalText(ix proto.Interaction) string {
+	parts := []string{ix.ToolName, ix.ToolTitle, ix.Summary, ix.Reason, ix.Plan, ix.EditableText, string(ix.ToolInput)}
+	for _, q := range ix.Questions {
+		parts = append(parts, q.Header, q.Question)
+		for _, o := range q.Options {
+			parts = append(parts, o.Label, o.Description)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// userApproval says why permission, plan or question card ix is the user's to allow, not its supervisor's ("" when the
 // supervisor may allow it; either may always deny it): it asks for a form or a secret, it is an owner-action proposal
-// or a secret hand-off, or its actual action goes out in the user's name, spends money or deletes. A local file edit's
-// payload is data, not an outward or destructive action; known tool actions are classified structurally before the
-// remaining text falls back to userApprovalWords.
+// or a secret hand-off, or its actual action goes out in the user's name, spends money, deletes or cannot be undone.
+// A local file edit's payload is data, not an outward or destructive action; known tool actions are classified
+// structurally before the remaining text falls back to whole-word matching.
 func userApproval(ix proto.Interaction) string {
 	switch {
 	case len(ix.Fields) > 0, ix.Secret, ix.Elicitation != nil:
 		return "asks for a form or a secret, which only the user fills in"
 	case ix.OwnerProposal, ix.ApprovalBatchID != "", ix.ToolName == proto.SecretHandoffTool:
 		return "is an owner action"
+	case ix.Kind == proto.IxPermission && ix.OutwardWrite:
+		return "would go out in the user's name, which only the user authorizes"
+	case ix.Reversible != nil && !*ix.Reversible:
+		return "cannot be undone, which only the user decides"
 	}
 	if ix.Kind == proto.IxPermission && (ix.ToolName == "Skill" || localFileEditPermission(ix)) {
 		// Skill only loads instructions; later tool calls are classified on their own.
@@ -785,15 +889,11 @@ func userApproval(ix proto.Interaction) string {
 	if verb := connector.WriteVerb(ix.ToolName); slices.Contains(outboundVerbs, verb) || slices.Contains(userApprovalActionVerbs, verb) {
 		return fmt.Sprintf("would send, reply or comment in the user's name, spend money or delete (tool action %s)", verb)
 	}
-	text := strings.ToLower(strings.Join([]string{ix.ToolName, ix.ToolTitle, ix.Summary, ix.Reason, ix.Plan, ix.EditableText,
-		string(ix.ToolInput)}, "\n"))
-	var hit []string
-	for _, w := range userApprovalWords {
-		if strings.Contains(text, w) {
-			hit = append(hit, w)
-		}
+	text := approvalText(ix)
+	if hit := approvalWordHits(text, ownerPresenceWords); len(hit) > 0 {
+		return fmt.Sprintf("asks for an in-person secret or verification, which only the user provides (%s)", strings.Join(hit, ", "))
 	}
-	if len(hit) > 0 {
+	if hit := approvalWordHits(text, userApprovalWords, userApprovalExtraWords, userApprovalInflectedWords); len(hit) > 0 {
 		return fmt.Sprintf("would send, reply or comment in the user's name, spend money or delete (%s)", strings.Join(hit, ", "))
 	}
 	return ""

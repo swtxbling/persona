@@ -64,6 +64,10 @@ type Hello struct {
 	// handed to the owner on a timeout, a P1 escalation and conclusion / progress cards post nothing. An older hub never
 	// sends it: off. A change of the switch sends manager.updated.
 	QuietPush bool `json:"quiet_push,omitempty"`
+	// PushGradingCards: the hub asks the manager to submit non-owner interaction cards at P1 while card grading is on.
+	// It is additive and absent on older hubs, which preserves their existing card delivery. The hub fills this field;
+	// the manager only consumes it and never changes the hub's grading policy.
+	PushGradingCards bool `json:"push_grading_cards,omitempty"`
 }
 
 // NotifyTimings are hub.json's notify section, and manager.json's hook_timeout_minutes, in milliseconds (0: the

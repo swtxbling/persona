@@ -12,6 +12,7 @@ import (
 	"time"
 
 	approvalops "github.com/nwverse/persona/server/internal/approval"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -660,6 +661,20 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 	return s.ownSettingActionExact(ctx, call, o, action, value, nil)
 }
 
+// settingChangePushLevel classifies the individual change, not the shared persona_settings source. The audited,
+// exactly restorable operational settings are P1 in quiet/grading. Everything else fails closed at P0: security
+// boundaries and settings without a complete before-image must never inherit the operational downgrade. Approval is
+// still required either way; reversible describes the write, never permission to execute it.
+func (s *Service) settingChangePushLevel(ctx context.Context, key string, change *ownChange) string {
+	if !s.nonOwnerCardPushHeld(ctx) {
+		return ""
+	}
+	if change != nil && change.reversible != nil && reversibleSettingAutoApproved(key) {
+		return assistantwire.LevelP1
+	}
+	return assistantwire.LevelP0
+}
+
 // ownSettingActionExact executes an optional grant already consumed by toolPersonaSettings. Consuming before setting
 // resolution and validation ensures that every failure of an approved item records its position and stops later items.
 // Without a grant the ordinary approval path is byte-for-byte unchanged.
@@ -703,7 +718,7 @@ func (s *Service) ownSettingActionExact(ctx context.Context, call ToolCall, o ow
 	}
 	outcome, err := s.waitPreparedCard(ctx, proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
 		Kind: proto.IxPermission, ToolName: toolName, Summary: proposal, ToolInput: shown, SessionTitle: "Persona",
-		CreatedAt: now, ExpiresAt: now.Add(settingCardWait)}, approvalops.Operation{
+		PushLevel: s.settingChangePushLevel(ctx, o.Key, change), CreatedAt: now, ExpiresAt: now.Add(settingCardWait)}, approvalops.Operation{
 		Replacement: call.MachineID + "\x00" + call.SessionID + "\x00setting\x00" + o.Key,
 		Denied:      "The user declined the change: nothing changed.",
 		Unanswered:  prompts.RenderSettingUnanswered(),

@@ -48,6 +48,7 @@ type tierPick struct {
 	Profile   string    // the profile's id
 	Active    bool      // the profile is the one in use (a trial's is not)
 	Name      string    // the tier's own name (an alias resolved)
+	Policy    string    // canonical non-default candidate policy ("ordered"), empty for default "pace"
 	Tier      ModelTier // the chosen candidate as a one-candidate tier, with the tier's description
 	Candidate int       // its position, 0 the first
 	Of        int       // how many the tier lists
@@ -74,6 +75,7 @@ type tierRankInput struct {
 	Profile string
 	Active  bool
 	Tier    string
+	Policy  string
 	Machine string
 	List    []TierCandidate
 	Checks  []tierCandidateCheck
@@ -120,7 +122,11 @@ func (s *Service) pickTierCandidateKeeping(ctx context.Context, p *ModelProfile,
 	}
 	t := p.Tiers[name]
 	list := t.list()
-	pick := tierPick{Profile: p.ID, Active: active, Name: name, Of: len(list), Reason: tierReasonOnly}
+	policy := ""
+	if len(list) > 1 {
+		policy = canonicalCandidatePolicy(t.CandidatePolicy)
+	}
+	pick := tierPick{Profile: p.ID, Active: active, Name: name, Policy: policy, Of: len(list), Reason: tierReasonOnly}
 	if !s.keepTierCandidate(ctx, p, machine, keep, &pick, list) && len(list) > 1 {
 		s.chooseTierCandidate(ctx, machine, &pick, list, -1)
 	}
@@ -161,7 +167,7 @@ func (s *Service) chooseTierCandidate(ctx context.Context, machine string, pick 
 	default:
 		pick.Candidate, pick.Reason = usable, tierReasonUnavailable
 	}
-	in := tierRankInput{Profile: pick.Profile, Active: pick.Active, Tier: pick.Name, Machine: machine, List: list, Checks: pick.Checks}
+	in := tierRankInput{Profile: pick.Profile, Active: pick.Active, Tier: pick.Name, Policy: pick.Policy, Machine: machine, List: list, Checks: pick.Checks}
 	if s.tierRank == nil {
 		choice := s.scoreTier(ctx, in)
 		pick.Scores = choice.Scores
@@ -235,12 +241,19 @@ func (p tierPick) dispatch() *TaskDispatch {
 			d.Args["candidates"] = p.Scores
 		}
 	}
+	if p.Policy != "" && p.Of > 1 {
+		if d.Args == nil {
+			d.Args = map[string]any{}
+		}
+		d.Args["policy"] = p.Policy
+	}
 	return d
 }
 
 // modelRoutingDetail is a model_routing row's detail: every candidate as the pick judged it.
 type modelRoutingDetail struct {
 	Machine    string               `json:"machine,omitempty"`
+	Policy     string               `json:"policy,omitempty"`
 	Candidates []tierCandidateCheck `json:"candidates,omitempty"`
 	// Scores is every candidate's score, headroom and efficiency when the scorer chose (#14701).
 	Scores []candidateScore `json:"scores,omitempty"`
@@ -250,7 +263,7 @@ type modelRoutingDetail struct {
 
 // modelRoutingOf is one row of model_routing for pick: where the start went (todo, plan task, session) is the caller's.
 func modelRoutingOf(pick tierPick, machine string) db.ModelRoutingRow {
-	raw, _ := json.Marshal(modelRoutingDetail{Machine: machine, Candidates: pick.Checks, Scores: pick.Scores, Args: pick.Args})
+	raw, _ := json.Marshal(modelRoutingDetail{Machine: machine, Policy: pick.Policy, Candidates: pick.Checks, Scores: pick.Scores, Args: pick.Args})
 	return db.ModelRoutingRow{At: time.Now().UTC(), ProfileID: pick.Profile, Active: pick.Active, Tier: pick.Name,
 		Candidate: pick.Candidate, Of: pick.Of, Launcher: pick.Tier.Launcher, Model: pick.Tier.Model, Effort: pick.Tier.Effort,
 		Reason: pick.Reason, Detail: raw}

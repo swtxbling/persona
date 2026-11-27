@@ -41,7 +41,25 @@ const (
 	// seededProfile is the template marked in use when the templates are made: a copy of the configuration, so
 	// nothing switches, and the tiers work from the start.
 	seededProfile = "performance"
+
+	// Candidate selection policies on a multi-candidate tier (ModelTier.CandidatePolicy). Empty and "pace" keep
+	// the default pace-headroom + efficiency scoring; "ordered" picks the first usable candidate in declared order
+	// whose applicable windows still have remaining allowance above their reserve.
+	candidatePolicyPace    = "pace"
+	candidatePolicyOrdered = "ordered"
 )
+
+func validCandidatePolicy(policy string) bool {
+	return policy == "" || policy == candidatePolicyPace || policy == candidatePolicyOrdered
+}
+
+func canonicalCandidatePolicy(policy string) string {
+	p := strings.TrimSpace(policy)
+	if p == candidatePolicyPace {
+		return ""
+	}
+	return p
+}
 
 var (
 	modelProfileID = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,31}$`)
@@ -106,14 +124,15 @@ func profileValue(v string) *string { return &v }
 // older names the tier still answers to (strong for core, standard for dev): a stored plan task, a start-defaults
 // preset or an older client naming one resolves to this tier.
 type ModelTier struct {
-	Launcher       string          `json:"launcher"`
-	Model          string          `json:"model,omitempty"`
-	Effort         string          `json:"effort,omitempty"`
-	Speed          string          `json:"speed,omitempty"`
-	PermissionMode string          `json:"permission_mode,omitempty"`
-	Description    string          `json:"description,omitempty"`
-	Candidates     []TierCandidate `json:"candidates,omitempty"`
-	Aliases        []string        `json:"aliases,omitempty"`
+	Launcher        string          `json:"launcher"`
+	Model           string          `json:"model,omitempty"`
+	Effort          string          `json:"effort,omitempty"`
+	Speed           string          `json:"speed,omitempty"`
+	PermissionMode  string          `json:"permission_mode,omitempty"`
+	Description     string          `json:"description,omitempty"`
+	Candidates      []TierCandidate `json:"candidates,omitempty"`
+	CandidatePolicy string          `json:"candidate_policy,omitempty"`
+	Aliases         []string        `json:"aliases,omitempty"`
 }
 
 // TierCandidate is one launcher a tier may run on, with its model, effort, start speed and permission mode.
@@ -167,6 +186,7 @@ func (t *ModelTier) normalize() {
 		t.Candidates = slices.Clone(t.Candidates)
 		t.setFirst(t.Candidates[0])
 	}
+	t.CandidatePolicy = canonicalCandidatePolicy(t.CandidatePolicy)
 	var aliases []string
 	for _, a := range t.Aliases {
 		if a = strings.TrimSpace(a); a != "" && !slices.Contains(aliases, a) {
@@ -176,10 +196,11 @@ func (t *ModelTier) normalize() {
 	t.Aliases = aliases
 }
 
-// equal: the same candidates, description and aliases.
+// equal: the same candidates, policy, description and aliases.
 func (t ModelTier) equal(o ModelTier) bool {
-	return t.first() == o.first() && t.Description == o.Description && slices.Equal(t.Candidates, o.Candidates) &&
-		slices.Equal(t.Aliases, o.Aliases)
+	return t.first() == o.first() && t.Description == o.Description &&
+		canonicalCandidatePolicy(t.CandidatePolicy) == canonicalCandidatePolicy(o.CandidatePolicy) &&
+		slices.Equal(t.Candidates, o.Candidates) && slices.Equal(t.Aliases, o.Aliases)
 }
 
 // answersTo: name is t's alias.

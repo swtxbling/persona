@@ -144,6 +144,9 @@ func checkModelTiers(tiers map[string]ModelTier) error {
 			return i18n.Err("assistant-model_profiles.err_tier_candidates", i18n.Args{"tier": name, "max": maxTierCandidates})
 		}
 		t.normalize()
+		if !validCandidatePolicy(t.CandidatePolicy) {
+			return i18n.Err("assistant-model_profiles.err_tier_candidate_policy", i18n.Args{"tier": name, "policy": t.CandidatePolicy})
+		}
 		for i, c := range t.list() {
 			if err := checkTierCandidate(candidateWhere(name, i), c); err != nil {
 				return err

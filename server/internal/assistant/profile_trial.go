@@ -197,10 +197,11 @@ func (s *Service) modelProfileCandidates(ctx context.Context, id string) (ModelP
 	for _, tierName := range slices.Sorted(maps.Keys(tiersCopy)) {
 		t := tiersCopy[tierName]
 		list := t.list()
+		policy := canonicalCandidatePolicy(t.CandidatePolicy)
 		stats := s.candidateTierStats(ctx, tierName, now)
 		items := make([]ModelCandidateStatus, len(list))
 		for i, c := range list {
-			h := s.candidateHeadroomAt(ctx, accounts, machine, c.Launcher, c.Model, now)
+			h := s.candidateHeadroomAtPolicy(ctx, accounts, machine, c.Launcher, c.Model, policy, now)
 			items[i] = ModelCandidateStatus{
 				Index:    i,
 				Launcher: c.Launcher,

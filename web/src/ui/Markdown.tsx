@@ -33,6 +33,8 @@ import { createWordFadeState, rememberShown, remainingMs, shownBefore, type Word
 import { cachedMarkdown, markdownCache, markdownKey } from "./markdown-cache";
 import "./stream/stream.css";
 import { ReplyQuote, ReplyStreaming, rehypeLinkedCode } from "./ReplyBlocks";
+import { QUOTES, splitCode, unquote } from "./stream/code";
+export { splitCode } from "./stream/code";
 
 // A link ends at whitespace or any non-ASCII character (Chinese text, full-width punctuation), without trailing
 // .,;:!? or an unbalanced ) ] (docs/lessons/ios.md: where a link ends). GFM's autolinks only end at whitespace, so
@@ -48,105 +50,6 @@ export function trimURL(url: string): string {
     while (u.endsWith(close) && u.split(open).length < u.split(close).length) u = u.slice(0, -1).replace(/[.,;:!?]+$/, "");
   }
   return u;
-}
-
-// Fenced code (``` or ~~~, also inside lists and quotes and on a list item's first line; an unclosed one runs to the
-// end of its quote or list item, or of the text while streaming), indented code (4 spaces after a blank line, outside
-// lists) and code spans (a run of n backticks up to the next run of n). Returns text and code alternately, so odd
-// indices are code: left alone by normalizeMath and linkify.
-// Quote markers are each taken with the spaces before them, then one space after the last. Written as
-// (?:[ \t]*>[ \t]?)*, a space between two markers fits either way, and a deeply quoted line that is no fence tried every
-// split before failing (24 markers took half a second, each one more doubled it; #9795).
-const QUOTES = /^(?:[ \t]*>)*(?:(?<=>)[ \t])?/;
-const FENCE = /^((?:[ \t]*>)*(?:(?<=>)[ \t])?)([ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?[ \t]*)(`{3,}|~{3,})/;
-const LIST_ITEM = /^(?:[ \t]*>)*[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]/;
-const INDENTED = /^( {4}|\t)/;
-
-const quoteDepth = (line: string) => (QUOTES.exec(line)![0].match(/>/g) ?? []).length;
-
-// A line without its first `depth` quote markers.
-function unquote(line: string, depth: number): string {
-  for (let k = 0; k < depth; k++) {
-    const m = /^[ \t]*>[ \t]?/.exec(line);
-    if (!m) break;
-    line = line.slice(m[0].length);
-  }
-  return line;
-}
-
-export function splitCode(md: string): string[] {
-  const parts = [""];
-  const add = (s: string, code: boolean) => {
-    if (parts.length % 2 === 0 === code) parts[parts.length - 1] += s;
-    else parts.push(s);
-  };
-  let text = "";
-  const flush = () => {
-    for (let i = 0; i < text.length; ) {
-      const j = text.indexOf("`", i);
-      if (j !== i) {
-        const end = j < 0 ? text.length : j;
-        add(text.slice(i, end), false);
-        i = end;
-        continue;
-      }
-      const n = /^`+/.exec(text.slice(i))![0].length;
-      const close = new RegExp(`(?<!\`)\`{${n}}(?!\`)`, "g");
-      close.lastIndex = i + n;
-      const m = close.exec(text);
-      add(text.slice(i, m ? m.index + n : i + n), !!m);
-      i = m ? m.index + n : i + n;
-    }
-    text = "";
-  };
-  const lines = md.split(/(?<=\n)/);
-  let blank = true;
-  let inList = false;
-  for (let i = 0; i < lines.length; ) {
-    const line = lines[i];
-    if (line.trim() && !/^[ \t]/.test(line)) inList = LIST_ITEM.test(line) || (inList && !blank);
-    const fence = FENCE.exec(line);
-    if (fence && !(fence[3][0] === "`" && line.slice(fence[0].length).includes("`"))) {
-      // The fence ends at a closing fence, or where its container does: a line with fewer quote markers, or (in a
-      // list item) a line indented less than the item's content.
-      const depth = quoteDepth(fence[1]);
-      const indent = inList || LIST_ITEM.test(line) ? fence[2].length : 0;
-      const end = new RegExp(`^[ \\t]*\\${fence[3][0]}{${fence[3].length},}[ \\t]*$`);
-      let j = i + 1;
-      let closed = false;
-      for (; j < lines.length; j++) {
-        const l = lines[j].replace(/\n$/, "");
-        if (quoteDepth(l) < depth) break;
-        const rest = unquote(l, depth);
-        if (indent && rest.trim() && /^[ \t]*/.exec(rest)![0].length < indent) break;
-        if (end.test(rest)) {
-          closed = true;
-          break;
-        }
-      }
-      const stop = closed ? j + 1 : j;
-      flush();
-      add(lines.slice(i, stop).join(""), true);
-      i = stop;
-      blank = false;
-      continue;
-    }
-    // A whitespace-only line is blank, not code: every block of indented code starts with a line that has text.
-    if (blank && !inList && INDENTED.test(line) && line.trim()) {
-      let j = i;
-      while (j < lines.length && (INDENTED.test(lines[j]) || !lines[j].trim())) j++;
-      while (j > i && !lines[j - 1].trim()) j--;
-      flush();
-      add(lines.slice(i, j).join(""), true);
-      i = j;
-      continue;
-    }
-    blank = !line.trim();
-    text += line;
-    i++;
-  }
-  flush();
-  return parts;
 }
 
 // What starts a line inside a quote or list item, and what a new line needs to stay in it: quote markers are kept,

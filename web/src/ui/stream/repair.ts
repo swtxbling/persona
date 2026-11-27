@@ -4,6 +4,7 @@
 // the original trailing code node rather than creating another block.
 
 import { lastMarkdownBlock, parseMarkdown, walkMarkdown, type MarkdownNode, type MarkdownRoot } from "./syntax";
+import { analyzeCode, maskCodeRanges } from "./code";
 
 function lineStart(source: string, offset: number): number {
   return source.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
@@ -137,12 +138,7 @@ function holdHalfRow(md: string): string {
   return md;
 }
 
-export function repairStreamingMarkdown(md: string): string {
-  if (!md) return md;
-  const tree = parseMarkdown(md);
-  const repairedFence = repairOpenFence(md, tree);
-  if (repairedFence) return repairedFence;
-  const outside = outsideFences(md, tree);
+function repairInlineMarkdown(md: string, outside: string): string {
   md = holdHalfRow(md);
   // half a code span: whatever * follows may be inside it
   let ticks = 0;
@@ -152,4 +148,26 @@ export function repairStreamingMarkdown(md: string): string {
   if (t.includes("![")) t = t.replace(/!\[([^\]\n]*)\]\([^)\n]*$/, "$1").replace(/!\[([^\]\n]*)$/, "$1");
   if (t.includes("](")) t = t.replace(/(^|[^!\\])\[([^\]\n]*)\]\([^)\n]*$/, "$1$2");
   return balance(balance(t, "**"), "*");
+}
+
+function repairWithParser(md: string): string {
+  const tree = parseMarkdown(md);
+  const repairedFence = repairOpenFence(md, tree);
+  if (repairedFence) return repairedFence;
+  return repairInlineMarkdown(md, outsideFences(md, tree));
+}
+
+export function repairStreamingMarkdown(md: string): string {
+  if (!md) return md;
+  const analysis = analyzeCode(md);
+  // References retain the R5 parser-backed container and invalid-opener decisions. Ordinary streaming text uses the
+  // cheaper block spans instead of constructing a complete remark processor for every incremental prefix.
+  if (analysis.textParts.some((part) => part.includes("]:"))) return repairWithParser(md);
+
+  const last = analysis.ranges.at(-1);
+  if (last?.fence && !last.fence.closed && last.end === md.length) {
+    const closer = `${last.fence.closingPrefix}${last.fence.marker}`;
+    return md.endsWith("\n") ? md + closer : `${md}\n${closer}`;
+  }
+  return repairInlineMarkdown(md, maskCodeRanges(md, analysis.ranges, true));
 }

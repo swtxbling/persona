@@ -123,6 +123,19 @@ describe("parser-backed complete-block classification", () => {
     }
   });
 
+  it("does not repair invalid or implicitly terminated fences when no reference forces the parser path", () => {
+    const sources = [
+      "Intro.\n\n> ```js\n> const x = 1;\n\nClosing.",
+      "Intro.\n\n- item\n\n  ```js\n  const x = 1;\n\nClosing.",
+      "Intro.\n\n```js`invalid\n\nClosing.",
+    ];
+    for (const source of sources) {
+      expect(repair(source), source).toBe(source);
+      expect(chunkedParserHtml(source), source).toBe(parserHtml(source));
+    }
+    expect(parserHtml(sources[2])).not.toContain("<pre>");
+  });
+
   it("repairs only genuinely open parser-confirmed container fences", () => {
     expect(repair("123. ```js\n     const x = 1;")).toBe("123. ```js\n     const x = 1;\n     ```");
     expect(repair("> - ```js\n>   const x = 1;")).toBe("> - ```js\n>   const x = 1;\n>   ```");

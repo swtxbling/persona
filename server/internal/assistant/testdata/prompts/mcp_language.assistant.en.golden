@@ -15,7 +15,7 @@
   },
   {
     "name": "ask_user",
-    "description": "Ask the user one or more multiple-choice questions on their iPhone (a card in this conversation plus a push notification) and wait for the answers. Use it to confirm anything risky (sending messages / email for them, deleting, changing live systems) or to let them pick between options. AskUserQuestion does not work here; use this. They can also type a free-form answer. Waits up to 2 hours; if the user writes in this conversation instead of picking an option, the question is withdrawn and the tool returns at once, with their message following. If nobody answers in time, the question becomes a to-do that waits for the user's call (in their to-do list and the next briefing), and their answer comes to this conversation later as a new message. With a deadline (each question then recommends one of its options): if nobody answers by it and you marked it reversible, the recommended options are taken by default and recorded on the question's to-do; one that cannot be undone is only reminded again and keeps waiting. With wait false the card goes up the same way but the call returns at once: end the turn without guessing the answer; it comes later as a new message quoting the question and the answer (or saying the card was closed unanswered, or expired and became a to-do). Use wait false only where your instructions say to; a confirmation this same turn needs (approving a message before it is sent) keeps the default. A waiting call holds this turn, so anything else sent to this conversation waits behind it: once such a message waits and the question has been up for a couple of minutes, the call returns without the answer and the card stays up as with wait false; end the turn then.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Ask the user one or more multiple-choice questions on their iPhone (a card in this conversation plus a push notification) and wait for the answers. Use it to confirm anything risky (sending messages / email for them, deleting, changing live systems) or to let them pick between options. AskUserQuestion does not work here; use this. They can also type a free-form answer. Waits up to 2 hours; if the user writes in this conversation instead of picking an option, the question is withdrawn and the tool returns at once, with their message following. If nobody answers in time, the question becomes a to-do that waits for the user's call (in their to-do list and the next briefing), and their answer comes to this conversation later as a new message. With a deadline (each question then recommends one of its options): if nobody answers by it and you marked it reversible, the recommended options are taken by default and recorded on the question's to-do; one that cannot be undone is only reminded again and keeps waiting. With wait false the card goes up the same way but the call returns at once: end the turn without guessing the answer; it comes later as a new message quoting the question and the answer (or saying the card was closed unanswered, or expired and became a to-do). Use wait false only where your instructions say to; a confirmation this same turn needs (approving a message before it is sent) keeps the default. A waiting call holds this turn, so anything else sent to this conversation waits behind it: once such a message waits and the question has been up for a couple of minutes, the call returns without the answer and the card stays up as with wait false; end the turn then. With push grading on, an ordinary question is P1 and stays in Needs you and the briefing without a lock-screen alert. A declared why_owner whose decision must interrupt keeps P0; push_level P0 alone does not override grading, and an explicit P1 always waits quietly. With push grading off, omitting both fields keeps the old delivery behavior.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -25,6 +25,25 @@
         "wait": {
           "type": "boolean",
           "description": "default true: hold this turn until the user answers. false: put the card up and return at once; the answer arrives later as a new message in this conversation"
+        },
+        "push_level": {
+          "type": "string",
+          "enum": [
+            "P0",
+            "P1"
+          ],
+          "description": "optional delivery request. P1 keeps the question in Needs you and the briefing without a lock-screen alert in push grading. P0 does not override grading by itself: it also needs a why_owner whose decision must interrupt"
+        },
+        "why_owner": {
+          "type": "string",
+          "enum": [
+            "irreversible",
+            "visible_to_others",
+            "priority",
+            "acceptance",
+            "only_owner_knows"
+          ],
+          "description": "optional: why only the user can answer. With push grading on, priority stays P1; the other declared reasons keep P0 unless push_level is explicitly P1. Omit it for an ordinary question"
         },
         "deadline": {
           "type": "string",
@@ -107,7 +126,7 @@
   },
   {
     "name": "notify_user",
-    "description": "Send the user a push notification right now (works when the app is closed). Tapping it opens this conversation. Use for results of scheduled runs and anything time-sensitive; ordinary replies already notify. In the hub's push grading, a notice from a conversation other than the main one is held for the briefing instead of alerting unless it is P0; the tool answer then says it was moved to the briefing, so treat the user as not alerted.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Send the user a push notification right now (works when the app is closed). Tapping it opens this conversation. Use for results of scheduled runs and anything time-sensitive; ordinary replies already notify. With push grading on, an ordinary notice is P1: it stays in the conversation, Needs you and the briefing without a lock-screen alert. P0 is reserved for the owner's own foreground turn in the main conversation with a declared why_owner whose decision must interrupt; a background round or another conversation stays P1 even when it requests P0. The tool answer says when a notice was held, so treat the user as not alerted. With push grading off, existing push_level behavior is unchanged.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -127,7 +146,18 @@
             "P0",
             "P1"
           ],
-          "description": "How urgent this is. P1 (default): worth knowing; in the hub's push grading it is held for the briefing instead of alerting, and from a non-main conversation it is held even without an explicit level. P0: something the user must do or decide themselves (an action only they can take, a decision only they can make), so it alerts even in push grading and from any conversation. Use P1 for results, progress and conclusions."
+          "description": "How urgent this is. P1: worth knowing; push grading holds it for Needs you and the briefing instead of alerting. P0: request an alert for something the user must do or decide themselves; with push grading on it also needs an eligible why_owner and the owner's own foreground turn in the main conversation. Use P1 for results, progress and conclusions"
+        },
+        "why_owner": {
+          "type": "string",
+          "enum": [
+            "irreversible",
+            "visible_to_others",
+            "priority",
+            "acceptance",
+            "only_owner_knows"
+          ],
+          "description": "optional with push_level P0: why only the user can act or decide. With push grading on, priority stays P1; the other declared reasons are eligible for P0 only in the owner's own foreground turn in the main conversation. Omit it for ordinary notices"
         },
         "related_key": {
           "type": "string",

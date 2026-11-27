@@ -35,6 +35,36 @@ import (
 // interaction queue and inbox call those apps' data methods (tools_apps.go); one that is still an app's to run goes to
 // that app (AppTool).
 
+// validateOwnerPushFields checks the declared urgency and why a question or notice is the owner's own decision.
+// The reason vocabulary stays the one decisions already use; this layer only carries it, never adds a new taxonomy.
+func validateOwnerPushFields(level, why string) error {
+	switch level {
+	case "", assistantwire.LevelP0, assistantwire.LevelP1:
+	default:
+		return fmt.Errorf("push_level must be P0 or P1")
+	}
+	if why != "" && !slices.Contains(whyOwners, why) {
+		return fmt.Errorf("why_owner is one of %s", strings.Join(whyOwners, ", "))
+	}
+	return nil
+}
+
+// declaredOwnerPushLevel is the level of an explicitly owner-facing tool card. With quiet/grading off the old input is
+// passed through unchanged. With it on, an ordinary card is P1; an explicit P1 stays P1; and only a declared reason
+// whose decision already interrupts earns P0. A bare self-declared P0 is not such a reason.
+func declaredOwnerPushLevel(level, why string, quiet bool) string {
+	if !quiet {
+		return level
+	}
+	if level == assistantwire.LevelP1 {
+		return assistantwire.LevelP1
+	}
+	if why != "" && decisionPushLevel(why) == assistantwire.LevelP0 {
+		return assistantwire.LevelP0
+	}
+	return assistantwire.LevelP1
+}
+
 // toolNames are the tools only assistant conversations get; their descriptions and schemas are in prompts/mcp
 // (docs/assistant/prompts.md).
 var toolNames = []string{"resource_status", "ask_user", "ask_user_withdraw", "notify_user", "supervision_finish", "schedule_followup", "schedule_routine", "schedule_state_set", "delete_routine", "list_followups",
@@ -290,23 +320,34 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			Title      string `json:"title"`
 			Body       string `json:"body"`
 			PushLevel  string `json:"push_level"`
+			WhyOwner   string `json:"why_owner"`
 			RelatedKey string `json:"related_key"`
 		}
 		if err := json.Unmarshal(args, &a); err != nil || strings.TrimSpace(a.Title+a.Body) == "" {
 			return "", fmt.Errorf("title and body are required")
 		}
-		// An empty level is passed through, not normalised to P1: with ln mode on the hub decides by conversation
-		// (the main conversation's ordinary notices still interrupt, fleet_link.go pushGradingNotifyLevel); with it off the
-		// hub derives P1 for a NotifyPush anyway (hub/push_grading.go levelFor), so delivery there is unchanged.
-		switch a.PushLevel {
-		case "", assistantwire.LevelP0, assistantwire.LevelP1:
-		default:
-			return "", fmt.Errorf("push_level must be P0 or P1")
+		a.WhyOwner = strings.TrimSpace(a.WhyOwner)
+		if err := validateOwnerPushFields(a.PushLevel, a.WhyOwner); err != nil {
+			return "", err
 		}
 		if s.justMeNow(machine, self) {
 			// A Just me turn (meeting_justme.go): no push and no copy anywhere; the text stays in the conversation,
 			// which the meeting page shows.
 			return justMeNotice(s.lang(ctx)), nil
+		}
+		quiet := s.quietModeOn(ctx)
+		level := declaredOwnerPushLevel(a.PushLevel, a.WhyOwner, quiet)
+		if quiet && a.PushLevel != assistantwire.LevelP0 {
+			level = assistantwire.LevelP1
+		}
+		if quiet && level == assistantwire.LevelP0 {
+			// A notice has no approval card of its own to keep the decision moving. Only the owner's own foreground turn in
+			// the main conversation may interrupt for it. A background round or another conversation stays P1 even when
+			// it names a valid reason; a model-chosen P0 never bypasses that boundary.
+			origin := s.callerOrigin(ctx, self)
+			if !s.isMainOn(ctx, machine, self) || origin.StartedBy != briefByOwner || origin.Request == nil {
+				level = assistantwire.LevelP1
+			}
 		}
 		// The lock screen and the channels hear there is news, not what it is (health.go): decided once, for the push and
 		// its copies alike.
@@ -320,7 +361,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends. pushResult holds
 		// it to its track's push_cap (track_attention.go), and the track tells immersive mode where it is from.
 		res, err := s.pushResult(withCard(ctx, cardNotifyUser), Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body,
-			Asked: true, Level: a.PushLevel, RelatedKey: clip(strings.TrimSpace(a.RelatedKey), 200), Track: space})
+			Asked: true, Level: level, RelatedKey: clip(strings.TrimSpace(a.RelatedKey), 200), Track: space})
 		if err != nil {
 			return "", err
 		}
@@ -1331,9 +1372,17 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 		} `json:"questions"`
 		// Wait false: the card goes up and the tool returns at once (ask_later.go). Unset is true.
 		Wait *bool `json:"wait"`
+		// PushLevel is only a request. WhyOwner is the declared, validated reason the question is the owner's own;
+		// quiet/grading uses that reason, not a bare P0, to choose the card's effective push level.
+		PushLevel string `json:"push_level"`
+		WhyOwner  string `json:"why_owner"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil || len(a.Questions) == 0 {
 		return "", fmt.Errorf("questions are required")
+	}
+	a.WhyOwner = strings.TrimSpace(a.WhyOwner)
+	if err := validateOwnerPushFields(a.PushLevel, a.WhyOwner); err != nil {
+		return "", err
 	}
 	var da askDeadlineArgs
 	if err := json.Unmarshal(args, &da); err != nil {
@@ -1363,6 +1412,7 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	ix := proto.Interaction{
 		ID: "ix_" + randomHex(6), MachineID: machine, SessionID: sessionID, SessionTitle: "Persona", Kind: proto.IxQuestion, CanCancel: true,
 		ToolName: "ask_user", ToolInput: args, CreatedAt: now.UTC(), ExpiresAt: expires.UTC(),
+		PushLevel: declaredOwnerPushLevel(a.PushLevel, a.WhyOwner, s.quietModeOn(ctx)),
 	}
 	if c, ok := s.session(ctx, machine, sessionID); ok {
 		ix.Cwd = c.Cwd

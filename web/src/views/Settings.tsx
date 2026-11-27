@@ -24,6 +24,7 @@ import { LanguageRow } from "./settings/LanguageRow";
 import { FontRows, RecentChatsRow, SidebarIconsRow, SidebarUsageRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
 import { setStarredEnabled, useStarredSetting } from "../lib/starred-summary";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
+import { setAutoOpenNeedsYou, useAutoOpenNeedsYouSetting } from "../lib/direct-waiting";
 import { setAgentDetails, useAgentDetails } from "../lib/context-usage";
 import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
 import { HubList } from "./Hubs";
@@ -744,6 +745,7 @@ const host = hostOf;
 function General({ onModel }: { onModel: () => void }) {
   const theme = useTheme();
   const replyMotion = useReplyMotionSetting();
+  const autoOpenNeedsYou = useAutoOpenNeedsYouSetting();
   const starred = useStarredSetting();
   const features = moduleFeaturesSource();
 
@@ -777,6 +779,9 @@ function General({ onModel }: { onModel: () => void }) {
         <LanguageRow />
         <Row label={t("settings.reply_motion")} hint={t("settings.reply_motion_hint")} wrapHint anchor="reply-motion">
           <Switch on={replyMotion} onChange={setReplyMotionEnabled} label={t("settings.reply_motion")} />
+        </Row>
+        <Row label={t("settings.auto_open_needs_you")} hint={t("settings.auto_open_needs_you_hint")} wrapHint anchor="auto-open-needs-you">
+          <Switch on={autoOpenNeedsYou} onChange={setAutoOpenNeedsYou} label={t("settings.auto_open_needs_you")} />
         </Row>
         <RecentChatsRow />
         <Row label={t("settings.starred_messages")} hint={t("settings.starred_messages_hint")} wrapHint anchor="starred-messages">

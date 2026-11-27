@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import { decisionDismissed, reviewState } from "./supervision";
 import { decisionLaterKey, type NeedsYouItem } from "./assistant-entries";
 import { heldDelivery, openAsk, taskReviewDecisionAsk } from "./todos";
@@ -85,15 +86,63 @@ export function directWaitingCount(items: NeedsYouItem[], ownAsks: Interaction[]
 }
 
 let requested = "";
+let requestedAutomatic = false;
 
-/** A sidebar click survives navigation: the main chat consumes this when its existing action bar mounts. */
-export function requestDirectWaiting(conversation: string): void {
+// Settings › General › Appearance: automatically open Needs you when a sidebar enters Main chat. Kept by this browser.
+const AUTO_OPEN_KEY = "persona.autoOpenNeedsYou";
+const settingListeners = new Set<() => void>();
+
+export function autoOpenNeedsYou(): boolean {
+  try {
+    return localStorage.getItem(AUTO_OPEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setAutoOpenNeedsYou(on: boolean): void {
+  if (!on && requestedAutomatic) {
+    requested = "";
+    requestedAutomatic = false;
+  }
+  try {
+    if (on) localStorage.setItem(AUTO_OPEN_KEY, "1");
+    else localStorage.removeItem(AUTO_OPEN_KEY);
+  } catch {
+    // storage unavailable: nothing is kept, the default (off) stays
+  }
+  settingListeners.forEach((listener) => listener());
+}
+
+function subscribeAutoOpen(listener: () => void) {
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === AUTO_OPEN_KEY || event.key === null) listener();
+  };
+  settingListeners.add(listener);
+  if (typeof window !== "undefined") window.addEventListener("storage", onStorage);
+  return () => {
+    settingListeners.delete(listener);
+    if (typeof window !== "undefined") window.removeEventListener("storage", onStorage);
+  };
+}
+
+export function useAutoOpenNeedsYouSetting(): boolean {
+  return useSyncExternalStore(subscribeAutoOpen, autoOpenNeedsYou, () => false);
+}
+
+/** An explicit request opens directly; a sidebar's automatic request follows the browser's off-by-default setting.
+ *  The request survives navigation: the main chat consumes it when its existing action bar mounts. */
+export function requestDirectWaiting(conversation: string, options?: { automatic?: boolean }): void {
+  if (options?.automatic && !autoOpenNeedsYou()) return;
   requested = conversation;
+  requestedAutomatic = Boolean(options?.automatic);
   window.dispatchEvent(new CustomEvent("persona:task-pending", { detail: conversation }));
 }
 
 export function takeDirectWaitingRequest(conversation: string): boolean {
   if (requested !== conversation) return false;
+  const wasAutomatic = requestedAutomatic;
   requested = "";
-  return true;
+  requestedAutomatic = false;
+  return !wasAutomatic || autoOpenNeedsYou();
 }

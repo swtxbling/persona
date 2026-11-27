@@ -113,7 +113,7 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
             : st === "working" || st === "needs_you" || st === "unread" ? <span aria-hidden className="absolute top-0.5 right-0.5 flex rounded-full ring-2 ring-canvas"><StatusMark state={st} /></span> : null,
           bindings.persona ? `${t("sidebar.persona_main")} (${formatChord(bindings.persona)})` : t("sidebar.persona_main"),
           undefined,
-          () => { if (main && pending > 0) requestDirectWaiting(main.session_id); },
+          () => { if (main && pending > 0) requestDirectWaiting(main.session_id, { automatic: true }); },
         )}
         {pages.map((p) => link(
           p.k,

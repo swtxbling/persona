@@ -169,6 +169,26 @@ describe("Settings category navigation", () => {
     expect(host.querySelector('[data-configuration="features"]')).toBeNull();
   });
 
+  it("keeps automatic Needs you opening off by default and persists the browser's choice", async () => {
+    await mount("/settings?tab=general");
+    const toggle = () => host.querySelector<HTMLButtonElement>('[data-settings-row="auto-open-needs-you"] [role="switch"]')!;
+    expect(toggle().getAttribute("aria-checked")).toBe("false");
+    expect(localStorage.getItem("persona.autoOpenNeedsYou")).toBeNull();
+
+    await act(async () => toggle().click());
+    expect(toggle().getAttribute("aria-checked")).toBe("true");
+    expect(localStorage.getItem("persona.autoOpenNeedsYou")).toBe("1");
+
+    // A fresh render reads the saved choice, as a browser reload does.
+    await act(async () => root.render(null));
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    expect(toggle().getAttribute("aria-checked")).toBe("true");
+
+    await act(async () => toggle().click());
+    expect(toggle().getAttribute("aria-checked")).toBe("false");
+    expect(localStorage.getItem("persona.autoOpenNeedsYou")).toBeNull();
+  });
+
   it("switches a module off and back on from General and reflects another tab's choice", async () => {
     forgetModuleSwitches();
     registerModule({
@@ -212,6 +232,7 @@ describe("Settings category navigation", () => {
       ["language", t("language.hint")],
       ["text-size", t("ui-look.text_size_hint")],
       ["reply-motion", t("settings.reply_motion_hint")],
+      ["auto-open-needs-you", t("settings.auto_open_needs_you_hint")],
       ["agent-details", t("context.details_hint")],
       ["install-app", t("settings.install_installed")],
     ];

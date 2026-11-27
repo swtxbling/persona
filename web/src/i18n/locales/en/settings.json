@@ -13,6 +13,8 @@
   "agent_preferences": "Agent preferences",
   "reply_motion": "Reply animation",
   "reply_motion_hint": "New replies fade in word by word. Off when the system's Reduce motion is on.",
+  "auto_open_needs_you": "Auto-open \"Needs you\" on entering main chat",
+  "auto_open_needs_you_hint": "Open the Needs you tray when you enter Main chat from the sidebar and something needs you. Off by default; the count capsule always lets you open it yourself. Applies to this browser only.",
   "starred_messages": "Starred messages",
   "starred_messages_hint": "Show Starred in the sidebar and Star / Unstar in the message menu. Your saved messages are kept while it's off.",
   "sidebar_terminals": "Show terminals in sidebar",

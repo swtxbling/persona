@@ -179,6 +179,8 @@
   "handoff_active_now": "刚刚活跃过",
   "handoff_not_active": "还没有动静",
   "handoff_gone": "没有这个任务了",
+  "checking": "正在核对任务…",
+  "unavailable": "暂时无法确认任务状态",
   "handoff_closed": "还没开 Agent 就结束了",
   "agent_idle": "空闲",
   "agent_stopped": "已停",

@@ -16,6 +16,7 @@ import { cx, useNow } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { StatusMark } from "../../ui/StatusMark";
 import { t } from "../../i18n";
+import { useTodoPresence } from "./use-todo-presence";
 
 /** How the Agent came to the task (a `task` feed item's `wake`): started for it (New), running already when the task
  *  took it over (Already active), or closed and resumed by the hand-off's message (Resumed). A plan can also
@@ -85,27 +86,28 @@ export interface Handoff {
   agentTitle?: string;
   /** The to-do the task is, once there is one. */
   todo?: string;
+  /** The associated id remains available while the cached list temporarily lacks the row. */
+  todoId?: string;
   /** Why the task did not start (no Agent), as the hub said it; the card says it in plain words. */
   failure?: string;
-  /** The task has no Agent and never will: closed before one started, or removed since (no `todo`). */
+  /** A real to-do closed before one started. A missing cache row never sets this. */
   ended?: boolean;
 }
 
 /** A task's cards: one per Agent the hand-off went to (handoffAgents), or one for the task while it has none: starting,
- *  why it did not start, or gone (removed since). `planned`: the plan's task, for its title and error before the to-do
+ *  why it did not start, or its controlled presence state. `planned`: the plan's task, for its title and error before the to-do
  *  arrives (or after it was removed); `superseded`: a later plan continues its to-do, so with no Agent of its own the
- *  card shows the to-do's latest rather than starting for ever. `loaded`: the to-do list is in, so a to-do it lacks is
- *  gone rather than on its way. `since`: the card's feed line's time; `slack`: how long before it its Agents may be linked
- *  (TASK_LINE_SLACK_MS for a standalone task line, none for a plan's). */
-export function taskHandoffs(todo: Todo | undefined, planned: { key: string; title: string; error?: string; todoId?: string; superseded?: boolean } | undefined, wake: HandoffWake, plans: Record<string, TaskPlan>, loaded = true, since?: string, slack = 0): Handoff[] {
+ *  card shows the to-do's latest rather than starting for ever. `since`: the card's feed line's time; `slack`: how long
+ *  before it its Agents may be linked (TASK_LINE_SLACK_MS for a standalone task line, none for a plan's). */
+export function taskHandoffs(todo: Todo | undefined, planned: { key: string; title: string; error?: string; todoId?: string; superseded?: boolean } | undefined, wake: HandoffWake, plans: Record<string, TaskPlan>, since?: string, slack = 0): Handoff[] {
   // a task made of a running Agent, or resumed: its Agent may be linked before the line; one a plan started never is
   const shown = handoffAgents(todo?.agents ?? [], since, wake === "active" || wake === "resumed" || Boolean(planned?.superseded), slack);
   if (todo && shown.length > 0) {
-    return shown.map((a) => ({ key: `${a.machine_id}/${a.session_id}`, title: todo.title, wake, mid: a.machine_id, sid: a.session_id, agentTitle: a.title, todo: todo.id }));
+    return shown.map((a) => ({ key: `${a.machine_id}/${a.session_id}`, title: todo.title, wake, mid: a.machine_id, sid: a.session_id, agentTitle: a.title, todo: todo.id, todoId: todo.id }));
   }
   const failure = ((todo ? whyNotStarted(todo, plans) : undefined) ?? planned?.error)?.trim();
-  const ended = !failure && (todo ? Boolean(todo.done_at) : Boolean(planned?.todoId) && loaded);
-  return [{ key: todo ? `todo:${todo.id}` : (planned?.key ?? "task"), title: todo?.title ?? planned?.title ?? "", wake, todo: todo?.id, failure: failure || undefined, ended: ended || undefined }];
+  const ended = !failure && Boolean(todo?.done_at);
+  return [{ key: todo ? `todo:${todo.id}` : (planned?.key ?? "task"), title: todo?.title ?? planned?.title ?? "", wake, todo: todo?.id, todoId: todo?.id ?? planned?.todoId, failure: failure || undefined, ended: ended || undefined }];
 }
 
 /** cindy's short id: the first 8 and last 4 characters ("83639512…7ed0"). Only in the card's tooltip: the Assistant's
@@ -132,7 +134,9 @@ export function lastActive(session: Pick<Session, "activity_at" | "updated_at"> 
 }
 
 export function HandoffCard({ handoff }: { handoff: Handoff }) {
-  const { mid, sid, todo, failure, wake } = handoff;
+  const { mid, sid, failure, wake } = handoff;
+  const presence = useTodoPresence(handoff.todoId);
+  const todo = handoff.todoId ? presence.todo?.id : handoff.todo;
   const agent = mid && sid ? { mid, sid } : undefined;
   const session = useStore((s) => (agent ? sessionIn(s, agent.mid, agent.sid) : undefined));
   const closed = useStore((s) => Boolean(todo && s.todos.find((x) => x.id === todo)?.done_at));
@@ -176,8 +180,12 @@ export function HandoffCard({ handoff }: { handoff: Handoff }) {
     <span data-handoff-failure className="min-w-0 break-words text-[12px] leading-4 text-red">
       {startFailureCardLine(failure, interactive)}
     </span>
-  ) : handoff.ended ? (
-    <span className="truncate text-[12px] leading-4 text-ink-3">{todo ? t("assistant-tasks.handoff_closed") : t("assistant-tasks.handoff_gone")}</span>
+  ) : handoff.ended && todo ? (
+    <span className="truncate text-[12px] leading-4 text-ink-3">{t("assistant-tasks.handoff_closed")}</span>
+  ) : !todo && handoff.todoId && presence.status === "gone" ? (
+    <span className="truncate text-xs leading-4 text-ink-3">{t("assistant-tasks.handoff_gone")}</span>
+  ) : !todo && handoff.todoId && (presence.status === "checking" || presence.status === "unavailable") ? (
+    <span className="truncate text-xs leading-4 text-ink-3">{presence.status === "checking" ? t("assistant-tasks.checking") : t("assistant-tasks.unavailable")}</span>
   ) : (
     <span className="truncate text-[12px] leading-4 text-ink-3">{t("assistant-tasks.starting_agent")}</span>
   );
@@ -211,7 +219,7 @@ export function HandoffCard({ handoff }: { handoff: Handoff }) {
   );
   // cindy's 16 px padding and 14 px gap; a phone's narrower card gives them back to the words
   const look = "flex w-full min-w-0 items-center gap-3 rounded-card bg-surface p-3 text-left shadow-card sm:gap-3.5 sm:p-4";
-  const data = { "data-handoff-card": agent ? `${agent.mid}/${agent.sid}` : todo ? `todo:${todo}` : handoff.key };
+  const data = { "data-handoff-card": agent ? `${agent.mid}/${agent.sid}` : todo ? `todo:${todo}` : handoff.key, "data-handoff-presence": presence.status };
   if (!interactive) return <div {...data} className={look}>{body}</div>;
   return (
     <button

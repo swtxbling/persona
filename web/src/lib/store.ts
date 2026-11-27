@@ -180,6 +180,11 @@ let state: State = {
 };
 
 const listeners = new Set<() => void>();
+/** Bumped on every state change so presence proofs can redraw even when a replacement leaves all compared fields equal. */
+let stateRevision = 0;
+export function storeRevision() {
+  return stateRevision;
+}
 
 // What a hub push changes is in `state` at once (getState, the code after it), but the views hear of it once per
 // animation frame: a busy hub sends a burst of frames each tick (machines, every machine's sessions, each pending
@@ -205,6 +210,7 @@ function notifySoon() {
 }
 
 function set(patch: Partial<State>) {
+  stateRevision++;
   const next = { ...state, ...patch };
   // Most sessions never encounter a deletion: only filter affected collections once one is known.
   if (hasDeletedConversations()) {
@@ -1705,7 +1711,9 @@ function numbered<T>(path: string, read: (dedupe: boolean) => Promise<T> = (dedu
         applied = n;
         return true;
       };
-      return { answer, fresh };
+      /** Read-only: this is still the latest applied answer under the same credential owner. */
+      const current = () => n === applied && owner === credentialOwner();
+      return { answer, fresh, current };
     },
     /** Every answer still on its way is old now (another login or confirmed mutation). */
     forget() {
@@ -1877,13 +1885,20 @@ export async function refresh() {
   await Promise.all([todosDone, assistantDone]);
 }
 
+/** A controlled list read's own outcome. A resolved Promise alone is not evidence that its answer was applied. */
+export type TodoRefreshResult = {
+  kind: "applied" | "stale" | "rejected" | "unsupported";
+  /** False after a newer answer, a confirmed mutation, reset(), or a credential-owner change. */
+  current: () => boolean;
+};
+
 /** Both refresh paths share the list, error and unsupported-hub (404) handling; only a fresh answer finishes loading. */
-function applyTodos(todos: PromiseSettledResult<TodosListAnswer>, fresh: () => boolean) {
-  if (!fresh()) return; // a later answer is in place, or this one belongs to a login reset() ended
+function applyTodos(todos: PromiseSettledResult<TodosListAnswer>, fresh: () => boolean): TodoRefreshResult["kind"] {
+  if (!fresh()) return "stale"; // a later answer is in place, or this one belongs to a login reset() ended
   if (todos.status === "fulfilled") {
     if (todos.value.notModified) {
       set({ todosLoaded: true, todosSupported: true, todosError: null });
-      return;
+      return "applied";
     }
     const list = todos.value.todos ?? [];
     const sharedBlockers = Array.isArray(todos.value.shared_blockers) ? todos.value.shared_blockers : [];
@@ -1909,16 +1924,18 @@ function applyTodos(todos: PromiseSettledResult<TodosListAnswer>, fresh: () => b
     });
     keepTaskRows([]);
     void lookUpTaskAgents();
-    return;
+    return "applied";
   }
   const reason = todos.reason;
   if (reason instanceof ApiError && reason.status === 404) {
     closedEpoch++;
     defaultTodos = [];
     olderClosedTodos = [];
-    return set({ todos: [], sharedBlockers: [], todoBoard: null, closedCursors: {}, closedLoading: false, closedError: null, todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
+    set({ todos: [], sharedBlockers: [], todoBoard: null, closedCursors: {}, closedLoading: false, closedError: null, todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
+    return "unsupported";
   }
   set({ todosLoaded: true, todosError: errorText(reason) });
+  return "rejected";
 }
 
 export function computeSpacesSupported(todos: Todo[]): boolean {
@@ -2053,14 +2070,21 @@ export function todosPushed() {
   });
 }
 
-export async function refreshTodos(opts?: { coalesce?: boolean }) {
+export async function refreshTodosControlled(opts?: { coalesce?: boolean }): Promise<TodoRefreshResult> {
   const asked = todosAsked.ask(opts?.coalesce === true);
+  let kind: TodoRefreshResult["kind"];
   try {
     const res = await asked.answer;
-    applyTodos({ status: "fulfilled", value: res }, asked.fresh);
+    kind = applyTodos({ status: "fulfilled", value: res }, asked.fresh);
   } catch (err) {
-    applyTodos({ status: "rejected", reason: err }, asked.fresh);
+    kind = applyTodos({ status: "rejected", reason: err }, asked.fresh);
   }
+  return { kind, current: asked.current };
+}
+
+/** Existing callers keep their Promise<void> behavior; presence checks use the controlled result above. */
+export async function refreshTodos(opts?: { coalesce?: boolean }): Promise<void> {
+  await refreshTodosControlled(opts);
 }
 
 /** A setting of the assistant's changed from this page (#8324): the copy in `assistant` shows it before the hub answers. */

@@ -1,6 +1,8 @@
 {
   "title": "タスク",
   "gone": "このタスクはもうありません。",
+  "checking": "タスクを確認しています…",
+  "unavailable": "タスクの状態を今は確認できません",
   "more": "その他",
   "remove_ellipsis": "タスクを削除…",
   "start_failed": "エージェントを起動できませんでした",

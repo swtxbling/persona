@@ -1,6 +1,8 @@
 {
   "title": "任务",
   "gone": "没有这个任务了。",
+  "checking": "正在核对任务…",
+  "unavailable": "暂时无法确认任务状态",
   "more": "更多",
   "remove_ellipsis": "移除任务…",
   "start_failed": "Agent 没开起来",

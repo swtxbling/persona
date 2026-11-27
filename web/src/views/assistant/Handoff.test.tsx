@@ -16,7 +16,7 @@ import { getFeedState, type FeedItem, type TaskPlan } from "../../lib/feed";
 import { handoffFrom } from "../../lib/handoff";
 import { setAgentOpenMode } from "../../lib/agent-open";
 import { closePanel, getPanel } from "../../lib/panel";
-import { applyCompleteSessions, refreshTodos, reset } from "../../lib/store";
+import { applyCompleteSessions, getState, refreshTodos, reset } from "../../lib/store";
 import type { Todo, TodoAgent } from "../../lib/todos";
 import type { Session } from "../../lib/types";
 import { handoffAgents, lastActive, shortSessionId, TASK_LINE_SLACK_MS } from "./Handoff";
@@ -132,7 +132,15 @@ describe("hand-off cards", () => {
       { title: "Removed task", prompt: "b", cwd: "/example", machine: "example-computer", todo_id: "removed-task" },
     ] };
     getFeedState().plans[plan.id] = plan;
-    await show({ id: "plan-event", conversation, at, kind: "plan", ref: plan.id }, [linked("broken-task", "Broken task", [], { start_error: "launcher missing", done_at: at })], []);
+    const brokenTodo = linked("broken-task", "Broken task", [], { start_error: "launcher missing", done_at: at });
+    served = [brokenTodo];
+    getState().conn = "online";
+    await act(async () => { await refreshTodos(); });
+    let release!: (response: Response) => void;
+    const controlled = new Promise<Response>((resolve) => { release = resolve; });
+    vi.stubGlobal("fetch", vi.fn((url: string) => String(url).includes("/todos") ? controlled : Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items: [], to_seq: 0 } : {}), { headers: { "Content-Type": "application/json" } }))));
+    await act(async () => root.render(<StrictMode><AssistantActionBar conversation={conversation} /><div data-chat-scroll><FeedLineView item={{ id: "plan-event", conversation, at, kind: "plan", ref: plan.id }} simplified /></div></StrictMode>));
+    for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
     const [broken, removed] = cards();
     act(() => broken!.click());
     expect(getPanel()).toEqual({ kind: "task", todo: "broken-task" });
@@ -141,6 +149,12 @@ describe("hand-off cards", () => {
     expect(broken!.textContent).not.toContain("launcher missing");
     expect(removed!.tagName).toBe("DIV");
     expect(removed!.textContent).toContain("Removed task");
+    expect(removed!.textContent).toContain(t("assistant-tasks.checking"));
+    expect(removed!.textContent).not.toContain(t("assistant-tasks.handoff_gone"));
+    await act(async () => {
+      release(Response.json({ todos: [brokenTodo] }));
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+    });
     expect(removed!.textContent).toContain(t("assistant-tasks.handoff_gone"));
   });
 

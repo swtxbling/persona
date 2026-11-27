@@ -193,6 +193,8 @@
   "handoff_active_now": "last active just now",
   "handoff_not_active": "no activity yet",
   "handoff_gone": "This task no longer exists",
+  "checking": "Checking the task…",
+  "unavailable": "Task status can't be confirmed right now",
   "handoff_closed": "Closed before an Agent started",
   "agent_idle": "Idle",
   "agent_stopped": "Stopped",

@@ -624,7 +624,9 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // #15511: an explicitly promoted main relay keeps its incoming source collapsed until opened, including its deferred
 // placeholder. This change on base 4bab19c283 measures en 483,782 B, ja 486,399 B, zh-Hans 484,384 B. Raise the budget
 // to the measured ja size plus 10 B of room.
-export const FIRST_SCREEN_BUDGET = 486_409;
+// Controlled task presence adds first-screen checking and unavailable strings: a cache miss is not yet proof of deletion.
+// Measured on base 15c1f40857ab: en 484,043 B, ja 486,544 B, zh-Hans 484,692 B. Raise to the measured ja size plus 10 B.
+export const FIRST_SCREEN_BUDGET = 486_554;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

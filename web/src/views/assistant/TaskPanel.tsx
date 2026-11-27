@@ -16,7 +16,8 @@ import { useStore } from "../../lib/store";
 import { Button, IconButton, Menu, useMenu, type MenuItem } from "../../ui/atoms";
 import { ChatView } from "../chat/ChatView";
 import { PanelHeader } from "../../ui/PanelHeader";
-import { NeedsYouBody, place, removeTaskNow, retryTaskNow, useRetrying, useTaskState, useTodo } from "./Tasks";
+import { NeedsYouBody, place, removeTaskNow, retryTaskNow, useRetrying, useTaskState } from "./Tasks";
+import { useTodoPresence } from "./use-todo-presence";
 import { retryOnLauncherNow, useFailedStart } from "./FailedTaskRow";
 import { stateOf } from "../../lib/format";
 import { usageLimitLabel } from "../../lib/usage-limit";
@@ -35,7 +36,8 @@ function openInWindow(to: Route): MenuItem {
 }
 
 export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => void }) {
-  const todo = useTodo(todoId);
+  const presence = useTodoPresence(todoId);
+  const todo = presence.todo;
   const st = useTaskState(todo);
   const sessions = useStore((s) => s.sessions);
   const [picked, setPicked] = useState<string | null>(null);
@@ -45,10 +47,11 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
   const deferred = useFeed((s) => todo?.part_of ? s.later[decisionLaterKey(todo)] : undefined);
   const planned = Object.values(plans).flatMap((p) => p.tasks).find((t) => t.todo_id === todoId);
   if (!todo || !st) {
+    const status = !todo && presence.status === "gone" ? "gone" : !todo && presence.status === "checking" ? "checking" : "unavailable";
     return (
       <>
         <PanelHeader icon="todo" title={t("assistant-taskpanel.title")} onClose={onClose} />
-        <div className="p-6 text-[13px] text-ink-2">{t("assistant-taskpanel.gone")}</div>
+        <div data-taskpanel-presence={status} className="p-6 text-[13px] text-ink-2">{status === "gone" ? t("assistant-taskpanel.gone") : status === "checking" ? t("assistant-taskpanel.checking") : t("assistant-taskpanel.unavailable")}</div>
       </>
     );
   }

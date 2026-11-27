@@ -804,7 +804,7 @@ function PlanHandoffs({ plan, since }: { plan: TaskPlan; since?: string }) {
       const id = planTaskTodo(plan, i, s.todos);
       // a later plan that continued the to-do holds it now; this plan's todo_id was cleared then (tasks_start.go)
       const superseded = Boolean(id && !task.todo_id && Object.values(plans).some((p) => p.id !== plan.id && p.tasks.some((x) => x.todo_id === id)));
-      return taskHandoffs(id ? s.todos.find((x) => x.id === id) : undefined, { key: `${plan.id}/${i}`, title: task.title, error: task.error, todoId: id, superseded }, task.continues ? "continuation" : "created", plans, s.todosLoaded, since);
+      return taskHandoffs(id ? s.todos.find((x) => x.id === id) : undefined, { key: `${plan.id}/${i}`, title: task.title, error: task.error, todoId: id, superseded }, task.continues ? "continuation" : "created", plans, since);
     }),
   );
   return <HandoffCards handoffs={handoffs} />;
@@ -830,7 +830,7 @@ function planTaskTodo(plan: TaskPlan, i: number, todos: Todo[]): string | undefi
 function TaskHandoffs({ item }: { item: FeedItem }) {
   const plans = useFeed((s) => s.plans);
   const wake = feedWake(field(item, "wake"));
-  const handoffs = useStoreRows((s) => (item.ref ? taskHandoffs(s.todos.find((x) => x.id === item.ref), { key: item.id, title: "", todoId: item.ref }, wake, plans, s.todosLoaded, item.at, TASK_LINE_SLACK_MS) : []));
+  const handoffs = useStoreRows((s) => (item.ref ? taskHandoffs(s.todos.find((x) => x.id === item.ref), { key: item.id, title: "", todoId: item.ref }, wake, plans, item.at, TASK_LINE_SLACK_MS) : []));
   return <HandoffCards handoffs={handoffs} />;
 }
 

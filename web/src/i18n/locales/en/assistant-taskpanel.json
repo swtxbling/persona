@@ -1,6 +1,8 @@
 {
   "title": "Task",
   "gone": "This task no longer exists.",
+  "checking": "Checking the task…",
+  "unavailable": "Task status can't be confirmed right now",
   "more": "More",
   "remove_ellipsis": "Remove task…",
   "start_failed": "Agent didn't start",

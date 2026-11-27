@@ -179,6 +179,8 @@
   "handoff_active_now": "たった今アクティブ",
   "handoff_not_active": "まだ動きがありません",
   "handoff_gone": "このタスクはもうありません",
+  "checking": "タスクを確認しています…",
+  "unavailable": "タスクの状態を今は確認できません",
   "handoff_closed": "エージェントの起動前に終了しました",
   "agent_idle": "待機中",
   "agent_stopped": "停止",

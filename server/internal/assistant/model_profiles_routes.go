@@ -223,6 +223,13 @@ func modelProfileStatus(err error) int {
 	return http.StatusInternalServerError
 }
 
+// modelTierInput is one tier entry in PUT /api/v1/model-profiles/{id}: CandidatePolicy is a pointer so omitting it
+// (an older client that does not know the field) preserves the stored policy, while an explicit "" or "pace" resets it.
+type modelTierInput struct {
+	ModelTier
+	CandidatePolicy *string `json:"candidate_policy"`
+}
+
 // modelProfileInput is PUT /api/v1/model-profiles/{id}: the whole profile, or (capture) the configuration as it is now
 // with the tiers kept. Unknown optional fields from newer clients are ignored during decoding while known fields are
 // strictly type-checked and validated and credential/endpoint fields are rejected.
@@ -232,7 +239,7 @@ type modelProfileInput struct {
 	Description string                    `json:"description"`
 	Purposes    map[string]ModelBinding   `json:"purposes"`
 	Launchers   map[string]LauncherModels `json:"launchers"`
-	Tiers       map[string]ModelTier      `json:"tiers"`
+	Tiers       map[string]modelTierInput `json:"tiers"`
 	Capture     bool                      `json:"capture"`
 }
 
@@ -332,10 +339,31 @@ func decodeSingleJSONObject(w http.ResponseWriter, r *http.Request, dst any, lim
 // send, and to one another tier kept first (in name order): that client cannot see it, so it could not fix the
 // refusal. An alias the body sends itself is checked as it is (checkModelTiers).
 func mergeTierInput(was, in map[string]ModelTier) map[string]ModelTier {
+	return mergeTierInputWithExplicit(was, in, nil)
+}
+
+func unpackTierInputs(in map[string]modelTierInput) (map[string]ModelTier, map[string]bool) {
+	if in == nil {
+		return nil, nil
+	}
+	tiers := make(map[string]ModelTier, len(in))
+	policyExplicit := make(map[string]bool, len(in))
+	for name, ti := range in {
+		t := ti.ModelTier
+		if ti.CandidatePolicy != nil {
+			t.CandidatePolicy = *ti.CandidatePolicy
+			policyExplicit[name] = true
+		}
+		tiers[name] = t
+	}
+	return tiers, policyExplicit
+}
+
+func mergeTierInputWithExplicit(was, in map[string]ModelTier, policyExplicit map[string]bool) map[string]ModelTier {
 	if in == nil {
 		return nil
 	}
-	from := renamedTiers(was, in)
+	from := renamedTiersWithExplicit(was, in, policyExplicit)
 	out := make(map[string]ModelTier, len(in))
 	var kept []string // tiers whose aliases came from was, not from the body
 	taken := map[string]bool{}
@@ -349,6 +377,9 @@ func mergeTierInput(was, in map[string]ModelTier) map[string]ModelTier {
 			first := t.first()
 			t.Candidates = slices.Clone(old.Candidates)
 			t.setFirst(first)
+		}
+		if ok && !policyExplicit[name] && t.CandidatePolicy == "" {
+			t.CandidatePolicy = old.CandidatePolicy
 		}
 		if t.Aliases == nil {
 			if ok {
@@ -385,6 +416,10 @@ func mergeTierInput(was, in map[string]ModelTier) map[string]ModelTier {
 // unpaired, a new tier as before: deleting a tier and adding an unrelated one on the same launcher in one save must
 // not hand the new one the old one's hidden candidates and aliases.
 func renamedTiers(was, in map[string]ModelTier) map[string]string {
+	return renamedTiersWithExplicit(was, in, nil)
+}
+
+func renamedTiersWithExplicit(was, in map[string]ModelTier, policyExplicit map[string]bool) map[string]string {
 	var gone, added []string
 	for _, name := range slices.Sorted(maps.Keys(was)) {
 		if _, ok := in[name]; !ok {
@@ -392,7 +427,7 @@ func renamedTiers(was, in map[string]ModelTier) map[string]string {
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(in)) {
-		if t := in[name]; t.Candidates == nil && t.Aliases == nil {
+		if t := in[name]; t.Candidates == nil && t.Aliases == nil && t.CandidatePolicy == "" && !policyExplicit[name] {
 			if _, ok := was[name]; !ok {
 				added = append(added, name)
 			}
@@ -459,10 +494,11 @@ func (s *Service) modelProfileRoutes() {
 			return
 		}
 		ctx := r.Context()
+		inTiers, policyExplicit := unpackTierInputs(in.Tiers)
 		_, err := s.saveModelProfile(ctx, in.Revision, r.PathValue("id"), profileActor(r), func(p *ModelProfile, exists bool) error {
 			p.Name, p.Description = in.Name, in.Description
 			if !in.Capture {
-				p.Purposes, p.Launchers, p.Tiers = in.Purposes, in.Launchers, mergeTierInput(p.Tiers, in.Tiers)
+				p.Purposes, p.Launchers, p.Tiers = in.Purposes, in.Launchers, mergeTierInputWithExplicit(p.Tiers, inTiers, policyExplicit)
 				return nil
 			}
 			purposes, launchers, tiers, err := s.captureModels(ctx)
@@ -470,8 +506,8 @@ func (s *Service) modelProfileRoutes() {
 				return err
 			}
 			p.Purposes, p.Launchers = purposes, launchers
-			if in.Tiers != nil {
-				p.Tiers = mergeTierInput(p.Tiers, in.Tiers)
+			if inTiers != nil {
+				p.Tiers = mergeTierInputWithExplicit(p.Tiers, inTiers, policyExplicit)
 			} else if !exists {
 				p.Tiers = tiers
 			}

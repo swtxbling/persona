@@ -28,17 +28,18 @@ import (
 // flat fields then edit its first); aliases, when given, replace the older names the tier answers to. Tier may name a
 // tier by an alias.
 type tierEdit struct {
-	Tier           string           `json:"tier"`
-	Launcher       *string          `json:"launcher"`
-	Model          *string          `json:"model"`
-	Effort         *string          `json:"effort"`
-	Speed          *string          `json:"speed"`
-	PermissionMode *string          `json:"permission_mode"`
-	Description    *string          `json:"description"`
-	Candidates     *[]TierCandidate `json:"candidates"`
-	Aliases        *[]string        `json:"aliases"`
-	Profiles       []string         `json:"profiles"`
-	Remove         bool             `json:"remove"`
+	Tier            string           `json:"tier"`
+	Launcher        *string          `json:"launcher"`
+	Model           *string          `json:"model"`
+	Effort          *string          `json:"effort"`
+	Speed           *string          `json:"speed"`
+	PermissionMode  *string          `json:"permission_mode"`
+	Description     *string          `json:"description"`
+	Candidates      *[]TierCandidate `json:"candidates"`
+	CandidatePolicy *string          `json:"candidate_policy"`
+	Aliases         *[]string        `json:"aliases"`
+	Profiles        []string         `json:"profiles"`
+	Remove          bool             `json:"remove"`
 }
 
 // tierChange is what a set does to one profile: the tier (its own name, an alias resolved) before and after (nil: none).
@@ -95,7 +96,7 @@ func editTiers(ps *modelProfiles, e tierEdit, now time.Time) ([]tierChange, erro
 			for _, f := range []struct {
 				set  *string
 				into *string
-			}{{e.Model, &first.Model}, {e.Effort, &first.Effort}, {e.Speed, &first.Speed}, {e.PermissionMode, &first.PermissionMode}, {e.Description, &t.Description}} {
+			}{{e.Model, &first.Model}, {e.Effort, &first.Effort}, {e.Speed, &first.Speed}, {e.PermissionMode, &first.PermissionMode}, {e.Description, &t.Description}, {e.CandidatePolicy, &t.CandidatePolicy}} {
 				if f.set != nil {
 					*f.into = strings.TrimSpace(*f.set)
 				}
@@ -212,12 +213,12 @@ func (s *Service) setModelTiers(ctx context.Context, v json.RawMessage) (*ownCha
 		return nil, i18n.Err("assistant-model_profiles.err_tier_name", i18n.Args{"tier": e.Tier})
 	}
 	given := e.Launcher != nil || e.Model != nil || e.Effort != nil || e.Speed != nil || e.PermissionMode != nil || e.Description != nil ||
-		e.Candidates != nil || e.Aliases != nil
+		e.Candidates != nil || e.CandidatePolicy != nil || e.Aliases != nil
 	switch {
 	case e.Remove && given:
 		return nil, errors.New("remove takes only tier and profiles")
 	case !e.Remove && !given:
-		return nil, errors.New("give what to set (launcher, model, effort, speed, permission_mode, description, candidates, aliases), or remove: true")
+		return nil, errors.New("give what to set (launcher, model, effort, speed, permission_mode, description, candidates, candidate_policy, aliases), or remove: true")
 	}
 	var launchers []string
 	if e.Candidates != nil {
@@ -285,6 +286,9 @@ func tierCardText(l i18n.Lang, t *ModelTier) string {
 		return i18n.T(l, "assistant-settings_tool.none")
 	}
 	text := t.allRuns()
+	if p := canonicalCandidatePolicy(t.CandidatePolicy); p != "" {
+		text += " [" + p + "]"
+	}
 	if t.Description != "" {
 		text += " — " + t.Description
 	}
@@ -380,6 +384,9 @@ func (s *Service) getModelTiers(ctx context.Context) (string, error) {
 		for _, name := range slices.Sorted(maps.Keys(p.Tiers)) {
 			t := p.Tiers[name]
 			b.WriteString("\n  - " + name + " = " + t.allRuns())
+			if policy := canonicalCandidatePolicy(t.CandidatePolicy); policy != "" {
+				b.WriteString(" [" + policy + "]")
+			}
 			if t.Description != "" {
 				b.WriteString(" — " + t.Description)
 			}
@@ -400,6 +407,7 @@ func (s *Service) getModelTiers(ctx context.Context) (string, error) {
 const modelTiersValue = `{"tier": a name (lowercase letters, digits, _ -), "launcher": a launcher name, "model": a model id ("" the launcher's default), ` +
 	`"effort": a level ("" the launcher's), "speed": standard | fast | ultrafast ("" the launcher's), ` +
 	`"permission_mode": default | acceptEdits | plan | auto | bypassPermissions ("" the launcher's), "description": when to use it (one line, at most 100 characters), ` +
-	`"candidates": [{"launcher", "model", "effort", "speed", "permission_mode"}, …] the ordered launchers the tier may run on, at most 6 (the hub takes the first usable one; the flat fields are the first), ` +
+	`"candidates": [{"launcher", "model", "effort", "speed", "permission_mode"}, …] the ordered launchers the tier may run on, at most 6 (the flat fields are the first), ` +
+	`"candidate_policy": pace | ordered (default: pace; ordered prefers declared order while remaining quota exceeds each window's reserve), ` +
 	`"aliases": [older names the tier answers to], "profiles": [profile ids] (default: every profile), "remove": true to delete it}; ` +
 	`a field left out keeps the tier's own (a different launcher drops the first candidate's old model, effort, speed and permission_mode), a new tier needs its launcher`

@@ -71,9 +71,17 @@ func usageWindowMinutes(w proto.UsageWindow) int {
 	return w.WindowMinutes
 }
 
-// windowHeadroom is one window's headroom in percentage points and when it turns positive again; ok is false when the
-// window cannot be judged (no length, no reset time, or a reset time that has passed or lies beyond one window).
+// windowHeadroom is one window's pace-based headroom in percentage points and when it turns positive again; ok is false
+// when the window cannot be judged (no length, no reset time, or a reset time that has passed or lies beyond one window).
 func windowHeadroom(w proto.UsageWindow, now time.Time) (pp float64, recovers time.Time, ok bool) {
+	return windowHeadroomForPolicy(w, candidatePolicyPace, now)
+}
+
+// windowHeadroomForPolicy evaluates one window's headroom under policy: default "pace" compares usage against the
+// elapsed share of the non-reserved allowance; "ordered" compares usage against the full non-reserved allowance
+// (1 - reserve) * 100, so linear time pace never blocks a window whose remaining quota still exceeds its reserve,
+// while any window at or below reserve (including exhausted short or weekly windows) recovers only at its reset.
+func windowHeadroomForPolicy(w proto.UsageWindow, policy string, now time.Time) (pp float64, recovers time.Time, ok bool) {
 	minutes := usageWindowMinutes(w)
 	if minutes <= 0 || w.ResetsAt == nil {
 		return 0, time.Time{}, false
@@ -84,9 +92,16 @@ func windowHeadroom(w proto.UsageWindow, now time.Time) (pp float64, recovers ti
 		return 0, time.Time{}, false
 	}
 	p := paceFor(minutes)
+	allowed := (1 - p.reserve) * 100
+	if canonicalCandidatePolicy(policy) == candidatePolicyOrdered {
+		pp = allowed - w.UsedPercent
+		if pp > 0 {
+			return pp, now, true
+		}
+		return pp, *w.ResetsAt, true
+	}
 	elapsed := float64(length-left) / float64(length)
 	share := max(elapsed, p.start)
-	allowed := (1 - p.reserve) * 100
 	pp = share*allowed - w.UsedPercent
 	if pp > 0 {
 		return pp, now, true
@@ -169,6 +184,11 @@ func accountStale(a proto.UsageAccount, now time.Time) bool {
 // headroomOf is provider's pace-based headroom for model over the merged accounts at now. Pure. Accounts are
 // deduplicated by their row id (the merge already folds one account seen by several sources into one row).
 func headroomOf(accounts []proto.UsageAccount, provider, model string, now time.Time) candidateHeadroom {
+	return headroomOfPolicy(accounts, provider, model, candidatePolicyPace, now)
+}
+
+// headroomOfPolicy is provider's headroom for model over the merged accounts at now under policy. Pure.
+func headroomOfPolicy(accounts []proto.UsageAccount, provider, model, policy string, now time.Time) candidateHeadroom {
 	provider = canonicalHeadroomProvider(provider)
 	var out candidateHeadroom
 	if provider == "" {
@@ -192,7 +212,7 @@ func headroomOf(accounts []proto.UsageAccount, provider, model string, now time.
 			stale++
 			continue
 		}
-		pp, at, ok := accountHeadroom(a, model, now)
+		pp, at, ok := accountHeadroomForPolicy(a, model, policy, now)
 		if !ok {
 			continue
 		}
@@ -215,9 +235,13 @@ func headroomOf(accounts []proto.UsageAccount, provider, model string, now time.
 	return out
 }
 
-// accountHeadroom is one account's headroom: the smallest of its windows that apply to model, with the time the
-// binding windows have all turned positive; false when none applies or can be judged.
+// accountHeadroom is one account's pace-based headroom: the smallest of its windows that apply to model, with the time
+// the binding windows have all turned positive; false when none applies or can be judged.
 func accountHeadroom(a proto.UsageAccount, model string, now time.Time) (float64, time.Time, bool) {
+	return accountHeadroomForPolicy(a, model, candidatePolicyPace, now)
+}
+
+func accountHeadroomForPolicy(a proto.UsageAccount, model, policy string, now time.Time) (float64, time.Time, bool) {
 	var (
 		least    float64
 		recovers time.Time
@@ -227,7 +251,7 @@ func accountHeadroom(a proto.UsageAccount, model string, now time.Time) (float64
 		if !windowForModel(w, model) {
 			continue
 		}
-		pp, at, ok := windowHeadroom(w, now)
+		pp, at, ok := windowHeadroomForPolicy(w, policy, now)
 		if !ok {
 			continue
 		}
@@ -260,10 +284,15 @@ func (s *Service) usageAccounts(ctx context.Context) []proto.UsageAccount {
 	return s.devs.UsageAccounts(ctx)
 }
 
-// candidateHeadroomAt is the headroom of launcher + model on machine, given the accounts read once for a dispatch.
+// candidateHeadroomAt is the pace-based headroom of launcher + model on machine, given the accounts read once for a dispatch.
 func (s *Service) candidateHeadroomAt(ctx context.Context, accounts []proto.UsageAccount, machine, launcher, model string, now time.Time) candidateHeadroom {
+	return s.candidateHeadroomAtPolicy(ctx, accounts, machine, launcher, model, candidatePolicyPace, now)
+}
+
+// candidateHeadroomAtPolicy is the headroom of launcher + model on machine under policy, given the accounts read once.
+func (s *Service) candidateHeadroomAtPolicy(ctx context.Context, accounts []proto.UsageAccount, machine, launcher, model, policy string, now time.Time) candidateHeadroom {
 	if len(accounts) == 0 {
 		return candidateHeadroom{} // nothing read: unknown, without looking up the provider
 	}
-	return headroomOf(accounts, s.headroomProvider(ctx, machine, launcher), model, now)
+	return headroomOfPolicy(accounts, s.headroomProvider(ctx, machine, launcher), model, policy, now)
 }

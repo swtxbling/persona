@@ -145,9 +145,17 @@ func shrink(n int, observed, prior float64) float64 {
 	return (float64(n)*observed + scorePriorWeight*prior) / (float64(n) + scorePriorWeight)
 }
 
-// scoreCandidates chooses among in (the tier's candidates in order) by prior. Pure. One candidate is the caller's to
-// short-circuit (reason only); here it is scored like any other.
+// scoreCandidates chooses among in (the tier's candidates in order) by prior under the default pace policy. Pure.
+// One candidate is the caller's to short-circuit (reason only); here it is scored like any other.
 func scoreCandidates(in []scoreInput, prior candidateStats) candidateChoice {
+	return scoreCandidatesWithPolicy(in, prior, candidatePolicyPace)
+}
+
+// scoreCandidatesWithPolicy chooses among in under policy. Default "pace" scores eligible candidates by efficiency and
+// headroom; "ordered" skips only unavailable or reserve-exhausted candidates (Known && H <= 0) and picks the first
+// remaining candidate in declared order without efficiency/headroom re-ranking. Pure.
+func scoreCandidatesWithPolicy(in []scoreInput, prior candidateStats, policy string) candidateChoice {
+	ordered := canonicalCandidatePolicy(policy) == candidatePolicyOrdered
 	tPrior, fpPrior := scorePriorMinutes, scorePriorPass
 	if prior.N > 0 {
 		tPrior, fpPrior = prior.MinutesP50, prior.FirstPass
@@ -168,14 +176,16 @@ func scoreCandidates(in []scoreInput, prior candidateStats) candidateChoice {
 				line.Skip = dispatchQuota
 				break
 			}
-			t := shrink(c.Stats.N, c.Stats.MinutesP50, tPrior)
-			fp := shrink(c.Stats.N, c.Stats.FirstPass, fpPrior)
-			score := t*(1+scoreBeta*(1-fp)) + scoreKappa*t/math.Sqrt(float64(c.Stats.N)+1)
-			if c.Headroom.Known {
-				score += scoreMu / (1 + 10*c.Headroom.H)
+			if !ordered {
+				t := shrink(c.Stats.N, c.Stats.MinutesP50, tPrior)
+				fp := shrink(c.Stats.N, c.Stats.FirstPass, fpPrior)
+				score := t*(1+scoreBeta*(1-fp)) + scoreKappa*t/math.Sqrt(float64(c.Stats.N)+1)
+				if c.Headroom.Known {
+					score += scoreMu / (1 + 10*c.Headroom.H)
+				}
+				score = math.Round(score*100) / 100
+				line.Score, line.Minutes, line.FirstPass = &score, roundScore(t), roundScore(fp)
 			}
-			score = math.Round(score*100) / 100
-			line.Score, line.Minutes, line.FirstPass = &score, roundScore(t), roundScore(fp)
 			eligible = append(eligible, i)
 		}
 		out.Scores[i] = line
@@ -186,6 +196,12 @@ func scoreCandidates(in []scoreInput, prior candidateStats) candidateChoice {
 	}
 	if len(eligible) == 0 {
 		out.Index, out.Reason = in[firstUsable].Index, dispatchOverPace
+		return out
+	}
+	if ordered {
+		chosen := eligible[0]
+		out.Index = in[chosen].Index
+		out.Reason = choiceReason(out.Scores, chosen, eligible[0])
 		return out
 	}
 	least := math.Inf(1)
@@ -248,17 +264,21 @@ func (s *Service) candidateTierStats(ctx context.Context, tier string, now time.
 }
 
 // scoreTier scores a tier's candidates as pickTierCandidate judged them (in.Checks: Available is usable here), with
-// the headroom read once from the merged usage accounts and the tier's 14-day efficiency.
+// the headroom read once from the merged usage accounts and, under default pace policy, the tier's 14-day efficiency.
 func (s *Service) scoreTier(ctx context.Context, in tierRankInput) candidateChoice {
 	now := time.Now()
+	policy := canonicalCandidatePolicy(in.Policy)
 	accounts := s.usageAccounts(ctx)
-	stats := s.candidateTierStats(ctx, in.Tier, now)
+	var stats tierStats
+	if policy != candidatePolicyOrdered {
+		stats = s.candidateTierStats(ctx, in.Tier, now)
+	}
 	inputs := make([]scoreInput, len(in.List))
 	for i, c := range in.List {
 		usable := i < len(in.Checks) && in.Checks[i].Available
 		inputs[i] = scoreInput{Index: i, Launcher: c.Launcher, Model: c.Model, Usable: usable,
-			Headroom: s.candidateHeadroomAt(ctx, accounts, in.Machine, c.Launcher, c.Model, now),
+			Headroom: s.candidateHeadroomAtPolicy(ctx, accounts, in.Machine, c.Launcher, c.Model, policy, now),
 			Stats:    stats.By[candidateStatsKey{c.Launcher, c.Model}]}
 	}
-	return scoreCandidates(inputs, stats.Prior)
+	return scoreCandidatesWithPolicy(inputs, stats.Prior, policy)
 }

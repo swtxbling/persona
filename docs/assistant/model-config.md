@@ -425,7 +425,7 @@ Creating or normally editing a task through the tasks API or the app does not ac
 
 ## Tier candidates are not a silent change
 
-An Agent preset (a model profile's tier) may list several ordered candidates (`docs/assistant/model-profiles.md` "Candidates and aliases"). Choosing a later one at dispatch, by quota headroom or past results, is not a silent model change: the user listed every candidate and ordered them, nothing outside the list is ever chosen, and each dispatch says on the plan card which candidate ran and why (`dispatch.reason`: `score`, `quota`, `unavailable`, `over_pace`, `kept`, `switched`). A tier with one candidate, and every configuration outside presets, still never switches providers on its own.
+An Agent preset (a model profile's tier) may list several ordered candidates (`docs/assistant/model-profiles.md` "Candidates and aliases") and an optional `candidate_policy` (`pace` by default, or `ordered` to prefer declared order while each applicable window stays above its reserve). Choosing a later one at dispatch, by quota headroom or past results, is not a silent model change: the user listed every candidate and ordered them, nothing outside the list is ever chosen, and each dispatch says on the plan card which candidate ran and why (`dispatch.reason`: `score`, `quota`, `unavailable`, `over_pace`, `kept`, `switched`). A tier with one candidate, and every configuration outside presets, still never switches providers on its own.
 
 ## Who owns models (2026-11-05)
 

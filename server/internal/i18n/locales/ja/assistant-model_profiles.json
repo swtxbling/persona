@@ -34,6 +34,7 @@
   "tier_dev": "このプロファイル作成時の新規 Agent のモデル：開発、調査、リサーチ。",
   "err_permission_mode": "{where} の権限モード {mode} は無効です。選択肢：{modes}。",
   "err_tier_candidates": "階層 {tier} の候補が {max} 個を超えています。",
+  "err_tier_candidate_policy": "プリセット {tier} の候補ポリシー {policy} は無効です。選択肢：pace、ordered。",
   "err_tier_alias": "階層 {tier}：{alias} は別名にできません。階層名の形式で、ほかの階層の名前や別名と重ならないものにしてください。",
   "err_forbidden_field": "モデルプロファイルに認証情報やエンドポイントの項目 {field} は含められません。"
 }

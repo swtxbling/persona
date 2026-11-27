@@ -115,7 +115,7 @@ func (s *Service) keepTierCandidate(ctx context.Context, p *ModelProfile, machin
 	}
 	now := time.Now()
 	facts := keepFacts{ReworkRounds: keep.Rework, FailStreak: keep.Prev.Failed,
-		Headroom: s.candidateHeadroomAt(ctx, s.usageAccounts(ctx), machine, c.Launcher, c.Model, now)}
+		Headroom: s.candidateHeadroomAtPolicy(ctx, s.usageAccounts(ctx), machine, c.Launcher, c.Model, pick.Policy, now)}
 	rule, args := keepSwitch(facts, now)
 	if rule == "" || len(list) == 1 {
 		pick.Candidate, pick.Reason = i, dispatchKept

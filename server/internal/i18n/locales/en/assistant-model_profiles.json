@@ -34,6 +34,7 @@
   "tier_dev": "The New Agent model when this profile was made: development, debugging and research.",
   "err_permission_mode": "Invalid permission mode {mode} in {where}. Modes: {modes}.",
   "err_tier_candidates": "Tier {tier} lists more than {max} candidates.",
+  "err_tier_candidate_policy": "Invalid candidate policy {policy} in tier {tier}. Policies: pace, ordered.",
   "err_tier_alias": "Tier {tier}: {alias} cannot be an alias; it must be a tier name of its own form and not the name or alias of another tier.",
   "err_forbidden_field": "Model profiles cannot include credential or endpoint field {field}."
 }

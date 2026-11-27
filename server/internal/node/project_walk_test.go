@@ -289,6 +289,7 @@ func TestProjectTranscriptsMatchesGlobProjects(t *testing.T) {
 // before reading it: Claude Code transcripts and their subagents', one written before the window, and a Codex rollout.
 func TestUsageSweepReportMatchesGlobbedFiles(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
 	n, home := testNode(t)
 	now := time.Now().UTC().Truncate(time.Minute).Add(30 * time.Second)
 	cutoff := now.Add(-usageWindow)

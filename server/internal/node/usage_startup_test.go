@@ -27,6 +27,7 @@ func usageStartupNode(t *testing.T) (*Node, <-chan []byte) {
 	home := t.TempDir()
 	config := filepath.Join(home, "claude-fixture")
 	t.Setenv("CLAUDE_CONFIG_DIR", config)
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
 	dir := filepath.Join(config, "projects", "fixture")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)

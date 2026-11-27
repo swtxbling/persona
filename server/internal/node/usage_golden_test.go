@@ -25,6 +25,7 @@ var updateUsageGolden = flag.Bool("update-usage-golden", false, "write testdata/
 // means to count differently, and say so in the change.
 func TestUsageMeterGolden(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
 	n, home := testNode(t)
 	fixtures, err := filepath.Glob(filepath.Join("..", "transcript", "testdata", "*.jsonl"))
 	if err != nil || len(fixtures) == 0 {

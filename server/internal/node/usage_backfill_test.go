@@ -17,6 +17,7 @@ import (
 // hour: a reply in two files once, <synthetic> skipped, nothing before since or in the live window (from before on).
 func TestUsageBackfillScan(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
 	n, home := testNode(t)
 	now := time.Now().UTC().Truncate(time.Hour)
 	since, before := now.Add(-10*24*time.Hour), now.Add(-26*time.Hour)
@@ -118,6 +119,7 @@ func TestBackfillRequests(t *testing.T) {
 // backfillPast lines in a row are past the week, so the weeks together read about one pass.
 func TestUsageBackfillWeeks(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
 	n, home := testNode(t)
 	now := time.Now().UTC().Truncate(time.Hour)
 	w1 := now.Add(-21 * 24 * time.Hour)

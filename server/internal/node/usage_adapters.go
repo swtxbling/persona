@@ -23,7 +23,7 @@ type usageAdapter interface {
 	// session is the session (or thread) the file at path belongs to.
 	session(path string) string
 	// parser reads one file's lines.
-	parser() tokenuse.Parser
+	parser() usageParser
 }
 
 // usageAdapters are the agents whose usage this node meters from files, in the order their files are read (a request
@@ -31,7 +31,8 @@ type usageAdapter interface {
 func (n *Node) usageAdapters() []usageAdapter {
 	return []usageAdapter{claudeUsage{}, codexUsage{tokenuse.Codex, (*Node).meteredCodexHomes},
 		codexUsage{tokenuse.Traex, func(n *Node) []string { return []string{n.traexHome()} }},
-		piUsageFiles{tokenuse.Pi, piAgentDir}, piUsageFiles{tokenuse.Omp, ompAgentDir}}
+		piUsageFiles{tokenuse.Pi, piAgentDir}, piUsageFiles{tokenuse.Omp, ompAgentDir},
+		agyUsage{node: n}}
 }
 
 // usageAgents are the agents this node meters, by file and by query.
@@ -52,7 +53,7 @@ type claudeUsage struct{}
 
 func (claudeUsage) agent() string                       { return tokenuse.Claude }
 func (claudeUsage) paths(n *Node, _ time.Time) []string { return n.projectTranscripts() }
-func (claudeUsage) parser() tokenuse.Parser             { return tokenuse.ClaudeParser() }
+func (claudeUsage) parser() usageParser                 { return tokenuseParser{tokenuse.ClaudeParser()} }
 func (claudeUsage) session(path string) string          { return claudeUsageSession(path) }
 
 // claudeUsageSession is a Claude Code transcript's session: its name (<id>.jsonl), the session folder over a
@@ -75,8 +76,8 @@ type codexUsage struct {
 	homes func(*Node) []string
 }
 
-func (c codexUsage) agent() string           { return c.name }
-func (c codexUsage) parser() tokenuse.Parser { return tokenuse.CodexParser(c.name) }
+func (c codexUsage) agent() string       { return c.name }
+func (c codexUsage) parser() usageParser { return tokenuseParser{tokenuse.CodexParser(c.name)} }
 
 func (c codexUsage) paths(n *Node, since time.Time) []string {
 	var out []string
@@ -131,8 +132,8 @@ type piUsageFiles struct {
 	dir  func(home string) string
 }
 
-func (p piUsageFiles) agent() string           { return p.name }
-func (p piUsageFiles) parser() tokenuse.Parser { return tokenuse.PiParser(p.name) }
+func (p piUsageFiles) agent() string       { return p.name }
+func (p piUsageFiles) parser() usageParser { return tokenuseParser{tokenuse.PiParser(p.name)} }
 
 func (p piUsageFiles) paths(n *Node, _ time.Time) []string {
 	if n.sessionScope != nil {

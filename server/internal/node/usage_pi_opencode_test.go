@@ -23,6 +23,7 @@ func piReply(ts time.Time, id, model string, in, out, read int) string {
 // a fork's copy of a request (the same entry id and time) is counted once.
 func TestUsageMeterPiAndOmp(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
 	n, home := testNode(t)
 	now := time.Now().UTC().Truncate(time.Minute).Add(30 * time.Second)
 	pi := filepath.Join(home, ".pi", "agent", "sessions", "--w--")
@@ -124,7 +125,7 @@ func TestUsageOpencode(t *testing.T) {
 	m := newUsageMeter()
 	m.launcherOf = func(s string) string { return "launcher-of-" + s }
 	for _, r := range (&opencodeUsage{}).poll(ctx, n, cutoff) {
-		m.add(&usageFile{}, r, cutoff)
+		m.add(&usageFile{}, usageRecordFromTokenuse(r), cutoff)
 	}
 	var total int64
 	for k, b := range m.buckets {
@@ -154,6 +155,7 @@ func TestUsageOpencode(t *testing.T) {
 // Codex (#10002): every segment of a continued thread is read, under the thread's session (the session list follows
 // its newest file); a rollout older than the session list's two weeks is read when the backfill reaches back to it.
 func TestUsageCodexSegmentsAndOldRollouts(t *testing.T) {
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
 	n, home := testNode(t)
 	now := time.Now().UTC().Truncate(time.Minute).Add(30 * time.Second)
 	const thread = "0199a213-81c0-7800-8aa1-0000000000aa"

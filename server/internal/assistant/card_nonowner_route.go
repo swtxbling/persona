@@ -89,6 +89,79 @@ func (s *Service) presentHeldNonOwnerCard(ix proto.Interaction, src string) {
 	})
 }
 
+// managerClassifiedP0 reports whether this process created the pending operation behind a P0 card. A prepared
+// approval or an assistant-owned question can carry a level classified by the manager. CreatedAt must match the
+// pending generation, so a different external card cannot reuse its ID. Every other path, including node hook calls
+// and direct Codex inventories, has no such provenance and cannot self-assert P0.
+func (s *Service) managerClassifiedP0(ix proto.Interaction) bool {
+	if ix.PushLevel != assistantwire.LevelP0 {
+		return false
+	}
+	s.fleet.mu.Lock()
+	p := s.fleet.interactions[ix.ID]
+	prepared := p != nil && p.prepared != nil && p.ix.CreatedAt.Equal(ix.CreatedAt)
+	s.fleet.mu.Unlock()
+	if prepared {
+		return true
+	}
+	s.questions.mu.Lock()
+	q := s.questions.m[ix.ID]
+	own := q != nil && q.ix.CreatedAt.Equal(ix.CreatedAt)
+	s.questions.mu.Unlock()
+	return own
+}
+
+// restoreHeldNonOwnerCard reconstructs the first held presentation without replaying its push. The interaction was
+// recorded before announce, so its stored PushLevel can be the external request rather than the manager's decision.
+// Settings and ask_user are the only manager-classified P0 sources introduced here; their stored P0 is retained.
+func (s *Service) restoreHeldNonOwnerCard(ctx context.Context, ix proto.Interaction) bool {
+	src := s.inputCardSource(ix, false)
+	if cardCategoryOf(src) != cardCatNone || ix.Delegate != nil || userApproval(ix) != "" {
+		return false
+	}
+	if ix.Kind == proto.IxScreen && (!supervisedScreen(ix) || userScreen(ix) != "") {
+		return false
+	}
+	if !s.nonOwnerCardPushHeld(ctx) {
+		return false
+	}
+	if ix.PushLevel == assistantwire.LevelP0 && (src == cardSettingsChange || src == cardAskUser) {
+		return false
+	}
+	cfg := s.settings(ctx)
+	to, routed := "", false
+	if !cfg.supervisorConversation(ix.SessionID) && !s.ixInAssistant(ctx, ix) {
+		to, routed = s.nonOwnerCardTarget(ctx, ix.MachineID, ix.SessionID)
+		if to == ix.SessionID {
+			to, routed = "", false
+		}
+	}
+	home := cfg.MachineID
+	if s.devs != nil && home != "" {
+		home = s.devs.Canonical(home)
+	}
+	now := time.Now()
+	s.fleet.mu.Lock()
+	p := s.fleet.interactions[ix.ID]
+	if p == nil || p.claimed || p.told || !p.ix.CreatedAt.Equal(ix.CreatedAt) {
+		s.fleet.mu.Unlock()
+		return false
+	}
+	if routed {
+		p.route = &askRoute{machine: home, ladder: []string{to}, routedAt: now, since: now, held: now,
+			parked: true, reminders: askRemindMax}
+	}
+	p.ix.Delegating = false
+	p.ix.PushLevel = assistantwire.LevelP1
+	p.heldNonOwner = true
+	p.told = true
+	shown := p.ix
+	s.fleet.mu.Unlock()
+	s.heldAnnounced(ix.ID)
+	s.show(shown) // restore visibility, never another alert
+	return true
+}
+
 // handNonOwnerCard intercepts every interaction card whose source is outside the owner's six classes and was not
 // already handled by ask_route or delegable. This includes agent permissions and questions, the manager's tool
 // permissions, device control and extension approvals. The card remains pending and answerable: its route is parked
@@ -112,9 +185,22 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	held := s.nonOwnerCardPushHeld(ctx)
+	// Preserve only P0 backed by a manager-owned pending operation. Every external card, including a direct Codex
+	// card that never passes nodeInteraction, falls through to the ordinary held P1 presentation instead.
+	if held && s.managerClassifiedP0(ix) {
+		return false
+	}
+	// These three sources already used the non-owner route before quiet/grading existed. Every source added by this
+	// change keeps its legacy owner delivery with both switches off rather than becoming hidden behind a queued relay.
+	legacyRoute := src == cardAgentPermission || src == cardAgentQuestion || src == cardExtensionApproval
+	if !held && !legacyRoute {
+		return false
+	}
 	cfg := s.settings(ctx)
 	to, routed := "", false
-	if !cfg.supervisorConversation(ix.SessionID) {
+	// Cards owned by an assistant conversation must stay answerable by the owner: interaction_answer deliberately
+	// refuses assistant-owned cards, so relaying one to main would create a route that cannot be answered.
+	if !cfg.supervisorConversation(ix.SessionID) && !s.ixInAssistant(ctx, ix) {
 		to, routed = s.nonOwnerCardTarget(ctx, ix.MachineID, ix.SessionID)
 		// Never let a malformed or stale route point back at its source.
 		if to == ix.SessionID {
@@ -150,6 +236,7 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 		}
 	}
 	p.ix.Delegating = routed && !held
+	p.heldNonOwner = held
 	if held {
 		p.ix.PushLevel = assistantwire.LevelP1
 	}

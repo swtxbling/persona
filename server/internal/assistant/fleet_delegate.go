@@ -282,7 +282,15 @@ func (s *Service) delegateNow(ix proto.Interaction, forget func(), since time.Ti
 	}
 	s.delegateMark(ix, "delegate_end") // before the user is told: a restart after this does not tell them twice
 	forget()                           // a repeat may arrive as soon as the first card becomes the user's
-	if s.handNonOwnerCard(ix) {
+	s.delegateFallback(ix)
+}
+
+// delegateFallback restores the legacy owner escalation when quiet/grading is off. Only an enabled grading mode
+// moves a failed, empty or timed-out delegation to the generic held non-owner route.
+func (s *Service) delegateFallback(ix proto.Interaction) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if s.nonOwnerCardPushHeld(ctx) && s.handNonOwnerCard(ix) {
 		return
 	}
 	s.escalate(ix)
@@ -364,11 +372,7 @@ func (s *Service) resumeDelegations(ctx context.Context, restored ...proto.Inter
 			s.workEvent(ix.MachineID, ix.SessionID, "delegate_failed", map[string]any{"id": ix.ID, "reason": "restart"})
 		}
 		s.delegateMark(ix, "delegate_end") // before the user is told, as delegateNow
-		go func(ix proto.Interaction) {
-			if !s.handNonOwnerCard(ix) {
-				s.escalate(ix)
-			}
-		}(ix)
+		go s.delegateFallback(ix)
 	}
 	return took
 }

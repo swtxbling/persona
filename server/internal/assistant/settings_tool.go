@@ -666,7 +666,7 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 // boundaries and settings without a complete before-image must never inherit the operational downgrade. Approval is
 // still required either way; reversible describes the write, never permission to execute it.
 func (s *Service) settingChangePushLevel(ctx context.Context, key string, change *ownChange) string {
-	if !s.quietModeOn(ctx) {
+	if !s.nonOwnerCardPushHeld(ctx) {
 		return ""
 	}
 	if change != nil && change.reversible != nil && reversibleSettingAutoApproved(key) {

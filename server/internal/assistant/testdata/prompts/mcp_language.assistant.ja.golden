@@ -15,7 +15,7 @@
   },
   {
     "name": "ask_user",
-    "description": "Ask the user one or more multiple-choice questions on their iPhone (a card in this conversation plus a push notification) and wait for the answers. Use it to confirm anything risky (sending messages / email for them, deleting, changing live systems) or to let them pick between options. AskUserQuestion does not work here; use this. They can also type a free-form answer. Waits up to 2 hours; if the user writes in this conversation instead of picking an option, the question is withdrawn and the tool returns at once, with their message following. If nobody answers in time, the question becomes a to-do that waits for the user's call (in their to-do list and the next briefing), and their answer comes to this conversation later as a new message. With a deadline (each question then recommends one of its options): if nobody answers by it and you marked it reversible, the recommended options are taken by default and recorded on the question's to-do; one that cannot be undone is only reminded again and keeps waiting. With wait false the card goes up the same way but the call returns at once: end the turn without guessing the answer; it comes later as a new message quoting the question and the answer (or saying the card was closed unanswered, or expired and became a to-do). Use wait false only where your instructions say to; a confirmation this same turn needs (approving a message before it is sent) keeps the default. A waiting call holds this turn, so anything else sent to this conversation waits behind it: once such a message waits and the question has been up for a couple of minutes, the call returns without the answer and the card stays up as with wait false; end the turn then. With push grading on, an ordinary question is P1 and stays in Needs you and the briefing without a lock-screen alert. A declared why_owner whose decision must interrupt keeps P0; push_level P0 alone does not override grading, and an explicit P1 always waits quietly. With push grading off, omitting both fields keeps the old delivery behavior.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Ask multiple-choice questions on the user's iPhone (a card in this conversation plus a push) and wait for answers; AskUserQuestion does not work here. Free-form answers are allowed. Default wait: up to 2 hours; if the user writes here, the question is withdrawn and their message follows. Unanswered questions become to-dos and answers arrive later. With a deadline, every question needs a recommendation: reversible ones take recommended defaults; irreversible ones only remind and wait. wait=false puts the card up and returns at once; end the turn without guessing. Use wait=false only when instructions allow; a confirmation this turn needs keeps waiting. A queued message may release a waiting call after a couple of minutes, leaving the card up. With push grading on, ordinary questions are P1 (Needs you and briefing, no lock-screen alert). P0 needs an interrupting why_owner; bare P0 cannot override grading, and explicit P1 wins. With grading off, omitting both fields keeps the old behavior.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -32,7 +32,7 @@
             "P0",
             "P1"
           ],
-          "description": "optional delivery request. P1 keeps the question in Needs you and the briefing without a lock-screen alert in push grading. P0 does not override grading by itself: it also needs a why_owner whose decision must interrupt"
+          "description": "P1 keeps the question in Needs you and briefing without an alert in push grading. P0 also needs an interrupting why_owner; bare P0 cannot override grading"
         },
         "why_owner": {
           "type": "string",
@@ -43,7 +43,7 @@
             "acceptance",
             "only_owner_knows"
           ],
-          "description": "optional: why only the user can answer. With push grading on, priority stays P1; the other declared reasons keep P0 unless push_level is explicitly P1. Omit it for an ordinary question"
+          "description": "Why only the user can answer. With push grading, priority stays P1; other declared reasons keep P0 unless push_level is explicitly P1. Omit for an ordinary question"
         },
         "deadline": {
           "type": "string",
@@ -126,7 +126,7 @@
   },
   {
     "name": "notify_user",
-    "description": "Send the user a push notification right now (works when the app is closed). Tapping it opens this conversation. Use for results of scheduled runs and anything time-sensitive; ordinary replies already notify. With push grading on, an ordinary notice is P1: it stays in the conversation, Needs you and the briefing without a lock-screen alert. P0 is reserved for the owner's own foreground turn in the main conversation with a declared why_owner whose decision must interrupt; a background round or another conversation stays P1 even when it requests P0. The tool answer says when a notice was held, so treat the user as not alerted. With push grading off, existing push_level behavior is unchanged.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Push the user now, even when the app is closed; tapping opens this conversation. Use for scheduled results and time-sensitive news. With QuietPush on, ordinary, background and non-main notices are P1 (Needs you and briefing, no alert). P0 requires push_level P0, an interrupting why_owner and the owner's foreground main-conversation turn. Held means not alerted. QuietPush off keeps existing behavior.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -146,7 +146,7 @@
             "P0",
             "P1"
           ],
-          "description": "How urgent this is. P1: worth knowing; push grading holds it for Needs you and the briefing instead of alerting. P0: request an alert for something the user must do or decide themselves; with push grading on it also needs an eligible why_owner and the owner's own foreground turn in the main conversation. Use P1 for results, progress and conclusions"
+          "description": "P1: Needs you and briefing, no alert with QuietPush. P0 needs an interrupting why_owner and the owner's foreground main turn; use P1 for results"
         },
         "why_owner": {
           "type": "string",
@@ -157,7 +157,7 @@
             "acceptance",
             "only_owner_knows"
           ],
-          "description": "optional with push_level P0: why only the user can act or decide. With push grading on, priority stays P1; the other declared reasons are eligible for P0 only in the owner's own foreground turn in the main conversation. Omit it for ordinary notices"
+          "description": "With P0, why only the user can act. priority stays P1; other reasons are P0-eligible only in the owner's foreground main-conversation turn. Omit for ordinary notices"
         },
         "related_key": {
           "type": "string",

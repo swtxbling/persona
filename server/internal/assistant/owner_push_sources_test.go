@@ -56,6 +56,7 @@ func TestNotifyUserOwnerPushLevelAtSource(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		quiet      bool
+		grading    bool
 		session    string
 		background bool
 		level      string
@@ -69,12 +70,17 @@ func TestNotifyUserOwnerPushLevelAtSource(t *testing.T) {
 		{name: "quiet background cannot self P0", quiet: true, session: "conv1", background: true, level: assistantwire.LevelP0, why: whyOnlyOwnerKnow, want: assistantwire.LevelP1},
 		{name: "quiet non main cannot self P0", quiet: true, session: "side1", level: assistantwire.LevelP0, why: whyOnlyOwnerKnow, want: assistantwire.LevelP1},
 		{name: "quiet explicit P1", quiet: true, session: "conv1", level: assistantwire.LevelP1, why: whyOnlyOwnerKnow, want: assistantwire.LevelP1},
+		{name: "card grading alone leaves explicit P0 to QuietPush", grading: true, session: "side1", background: true, level: assistantwire.LevelP0, want: assistantwire.LevelP0},
+		{name: "card grading alone leaves derived default to QuietPush", grading: true, session: "side1", want: ""},
 		{name: "off keeps explicit P0", session: "conv1", background: true, level: assistantwire.LevelP0, want: assistantwire.LevelP0},
 		{name: "off keeps derived default", session: "side1", want: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f := newOwnerPushSourceService(t)
 			pushQuietFor(t, s, tc.quiet)
+			if tc.grading {
+				setPushGradingCardsForTest(f)
+			}
 			ownerTranscript(f, tc.background)
 			args := map[string]any{"title": "Result", "body": "Read the result"}
 			if tc.level != "" {
@@ -140,6 +146,7 @@ func TestAskUserOwnerPushLevelAtSource(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		quiet      bool
+		grading    bool
 		session    string
 		background bool
 		level      string
@@ -154,12 +161,18 @@ func TestAskUserOwnerPushLevelAtSource(t *testing.T) {
 		{name: "quiet declared priority", quiet: true, session: "conv1", level: assistantwire.LevelP0, why: whyPriority, want: assistantwire.LevelP1},
 		{name: "quiet explicit P1 wins", quiet: true, session: "conv1", level: assistantwire.LevelP1, why: whyOnlyOwnerKnow, want: assistantwire.LevelP1},
 		{name: "quiet declared reason needs no self P0", quiet: true, session: "conv1", why: whyVisible, want: assistantwire.LevelP0},
+		{name: "grading main ordinary self P0", grading: true, session: "conv1", level: assistantwire.LevelP0, want: assistantwire.LevelP1},
+		{name: "grading main declared owner reason", grading: true, session: "conv1", level: assistantwire.LevelP0, why: whyOnlyOwnerKnow, want: assistantwire.LevelP0},
+		{name: "grading explicit P1 wins", grading: true, session: "conv1", level: assistantwire.LevelP1, why: whyIrreversible, want: assistantwire.LevelP1},
 		{name: "off keeps old default", session: "conv1", want: ""},
 		{name: "off carries explicit P0", session: "side1", level: assistantwire.LevelP0, want: assistantwire.LevelP0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f := newOwnerPushSourceService(t)
 			pushQuietFor(t, s, tc.quiet)
+			if tc.grading {
+				setPushGradingCardsForTest(f)
+			}
 			ownerTranscript(f, tc.background)
 			ix := askUserSourceCard(t, s, tc.session, askUserSourceArgs(tc.level, tc.why))
 			if ix.PushLevel != tc.want {
@@ -207,6 +220,7 @@ func TestPlanWaitingPushLevelAtSource(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		quiet   bool
+		grading bool
 		session string
 		step    string
 		want    string
@@ -217,11 +231,18 @@ func TestPlanWaitingPushLevelAtSource(t *testing.T) {
 		{name: "quiet money owner step", quiet: true, session: "conv1", step: ownerStepMoney, want: assistantwire.LevelP0, wantKey: true},
 		{name: "quiet outward owner step", quiet: true, session: "side1", step: ownerStepOutward, want: assistantwire.LevelP0, wantKey: true},
 		{name: "quiet irreversible owner step", quiet: true, session: "conv1", step: ownerStepIrreversible, want: assistantwire.LevelP0, wantKey: true},
+		{name: "grading without owner step", grading: true, session: "conv1", want: assistantwire.LevelP1, wantKey: true},
+		{name: "grading money owner step", grading: true, session: "conv1", step: ownerStepMoney, want: assistantwire.LevelP0, wantKey: true},
+		{name: "grading outward owner step", grading: true, session: "side1", step: ownerStepOutward, want: assistantwire.LevelP0, wantKey: true},
+		{name: "grading irreversible owner step", grading: true, session: "conv1", step: ownerStepIrreversible, want: assistantwire.LevelP0, wantKey: true},
 		{name: "off keeps old default", session: "conv1", want: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f := newOwnerPushSourceServiceOn(t, true)
 			pushQuietFor(t, s, tc.quiet)
+			if tc.grading {
+				setPushGradingCardsForTest(f)
+			}
 			if tc.step != "" {
 				s.mainPlansWait = false
 			}
@@ -305,22 +326,42 @@ func settingSourceCard(t *testing.T, s *Service, f *fakeHub, key, value string) 
 
 func TestSettingsChangePushLevelAtSource(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		quiet bool
-		key   string
-		value string
-		want  string
+		name    string
+		quiet   bool
+		grading bool
+		key     string
+		value   string
+		want    string
 	}{
 		{name: "quiet security boundary", quiet: true, key: readonlyModeKey, value: `"prompt"`, want: assistantwire.LevelP0},
 		{name: "quiet reversible operation", quiet: true, key: "assistant.recent_task_chats", value: `true`, want: assistantwire.LevelP1},
+		{name: "grading security boundary", grading: true, key: readonlyModeKey, value: `"prompt"`, want: assistantwire.LevelP0},
+		{name: "grading reversible operation", grading: true, key: "assistant.recent_task_chats", value: `true`, want: assistantwire.LevelP1},
+		{name: "off security keeps old default", key: readonlyModeKey, value: `"prompt"`, want: ""},
 		{name: "off keeps old default", key: "assistant.recent_task_chats", value: `true`, want: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, f := newOwnerPushSourceService(t)
+			s, f, seen := newOwnerPushCaptureService(t)
 			pushQuietFor(t, s, tc.quiet)
+			if tc.grading {
+				setPushGradingCardsForTest(f)
+			}
 			card := settingSourceCard(t, s, f, tc.key, tc.value)
 			if card.PushLevel != tc.want {
 				t.Fatalf("settings card push_level = %q, want %q (%+v)", card.PushLevel, tc.want, card)
+			}
+			n := nextOwnerPush(t, seen)
+			if n.Interaction == nil || n.Interaction.ID != card.ID || n.Interaction.PushLevel != tc.want {
+				t.Fatalf("settings push = %+v, want card %s at %q", n, card.ID, tc.want)
+			}
+			// The ordinary owner path leaves Notification.Level empty and lets the hub read the card's explicit level.
+			// The held non-owner presentation sets both to P1.
+			wantNotice := tc.want
+			if tc.want == assistantwire.LevelP0 {
+				wantNotice = ""
+			}
+			if n.Level != wantNotice {
+				t.Fatalf("settings notification level = %q, want %q", n.Level, wantNotice)
 			}
 			if tc.key == "assistant.recent_task_chats" && s.recentTaskChats(context.Background()) {
 				t.Fatal("a reversible operational setting executed without owner approval")
@@ -366,56 +407,63 @@ func nextOwnerPush(t *testing.T, seen <-chan Notification) Notification {
 }
 
 func TestAskUserP0CardCanBeAnsweredWithoutWaitingBypass(t *testing.T) {
-	s, f, seen := newOwnerPushCaptureService(t)
-	pushQuietFor(t, s, true)
-	ownerTranscript(f, false)
-	published := make(chan struct{}, 16)
-	f.mu.Lock()
-	f.onTell = func() {
-		select {
-		case published <- struct{}{}:
-		default:
-		}
+	for _, mode := range []string{"quiet", "grading"} {
+		t.Run(mode, func(t *testing.T) {
+			s, f, seen := newOwnerPushCaptureService(t)
+			pushQuietFor(t, s, mode == "quiet")
+			if mode == "grading" {
+				setPushGradingCardsForTest(f)
+			}
+			ownerTranscript(f, false)
+			published := make(chan struct{}, 16)
+			f.mu.Lock()
+			f.onTell = func() {
+				select {
+				case published <- struct{}{}:
+				default:
+				}
+			}
+			f.mu.Unlock()
+			done := make(chan proto.ToolResult, 1)
+			go func() {
+				done <- callOwnerSourceTool(t, s, "conv1", "ask_user", askUserSourceArgs(assistantwire.LevelP0, whyOnlyOwnerKnow))
+			}()
+			timer := time.NewTimer(5 * time.Second)
+			defer timer.Stop()
+			var ix proto.Interaction
+			for {
+				if cards := s.pendingQuestions(); len(cards) == 1 {
+					ix = cards[0]
+					break
+				}
+				select {
+				case <-published:
+				case <-timer.C:
+					t.Fatal("waiting ask_user card was not published")
+				}
+			}
+			s.askOnPhone([]proto.Interaction{ix})
+			n := nextOwnerPush(t, seen)
+			if n.Interaction == nil || n.Interaction.PushLevel != assistantwire.LevelP0 || n.Level == assistantwire.LevelP1 {
+				t.Fatalf("push = %+v, want the declared P0 card without a P1 notification override", n)
+			}
+			raw, _ := json.Marshal(proto.Resolution{Answers: map[string]string{"Which option?": "One"}})
+			if _, err := s.Action(context.Background(), Action{Op: "answer", InteractionID: ix.ID, Answer: raw}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case res := <-done:
+				if res.IsError || !strings.Contains(res.Content[0].Text, "Which option? → One") {
+					t.Fatalf("ask_user answer = %+v", res)
+				}
+			case <-timer.C:
+				t.Fatal("declared P0 ask_user did not return its answer")
+			}
+			f.mu.Lock()
+			f.onTell = nil
+			f.mu.Unlock()
+		})
 	}
-	f.mu.Unlock()
-	done := make(chan proto.ToolResult, 1)
-	go func() {
-		done <- callOwnerSourceTool(t, s, "conv1", "ask_user", askUserSourceArgs(assistantwire.LevelP0, whyOnlyOwnerKnow))
-	}()
-	timer := time.NewTimer(5 * time.Second)
-	defer timer.Stop()
-	var ix proto.Interaction
-	for {
-		if cards := s.pendingQuestions(); len(cards) == 1 {
-			ix = cards[0]
-			break
-		}
-		select {
-		case <-published:
-		case <-timer.C:
-			t.Fatal("waiting ask_user card was not published")
-		}
-	}
-	s.askOnPhone([]proto.Interaction{ix})
-	n := nextOwnerPush(t, seen)
-	if n.Interaction == nil || n.Interaction.PushLevel != assistantwire.LevelP0 {
-		t.Fatalf("push = %+v, want the declared P0 card", n)
-	}
-	raw, _ := json.Marshal(proto.Resolution{Answers: map[string]string{"Which option?": "One"}})
-	if _, err := s.Action(context.Background(), Action{Op: "answer", InteractionID: ix.ID, Answer: raw}); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case res := <-done:
-		if res.IsError || !strings.Contains(res.Content[0].Text, "Which option? → One") {
-			t.Fatalf("ask_user answer = %+v", res)
-		}
-	case <-timer.C:
-		t.Fatal("declared P0 ask_user did not return its answer")
-	}
-	f.mu.Lock()
-	f.onTell = nil
-	f.mu.Unlock()
 }
 
 func TestOwnerCardsCarryTheirLevelIntoThePush(t *testing.T) {

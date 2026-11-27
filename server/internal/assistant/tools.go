@@ -1412,7 +1412,7 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	ix := proto.Interaction{
 		ID: "ix_" + randomHex(6), MachineID: machine, SessionID: sessionID, SessionTitle: "Persona", Kind: proto.IxQuestion, CanCancel: true,
 		ToolName: "ask_user", ToolInput: args, CreatedAt: now.UTC(), ExpiresAt: expires.UTC(),
-		PushLevel: declaredOwnerPushLevel(a.PushLevel, a.WhyOwner, s.quietModeOn(ctx)),
+		PushLevel: declaredOwnerPushLevel(a.PushLevel, a.WhyOwner, s.nonOwnerCardPushHeld(ctx)),
 	}
 	if c, ok := s.session(ctx, machine, sessionID); ok {
 		ix.Cwd = c.Cwd

@@ -501,16 +501,17 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if inRound {
 		granted = func() func(PlanTask) bool { return s.scheduleGrantCover(ctx, round, machine, sessionID) }
 	}
-	// Only what the owner really has to approve waits on a card: confirmed words, a request gate, a writable or
+	// Only what the owner really has to approve waits on a card: confirmed words, a request gate, a
 	// non-supervisor continuation handoff (#12980), an explicit owner step, and an ordinary conversation's writable
-	// work where the owner has not let such work start by itself. A supervisor's read-only continuation is its own release.
+	// work where the owner has not let such work start by itself. A main conversation or direction lead's continuation
+	// is its own release, read-only or writable.
 	step := planOwnerStep(p.Tasks)
 	needsOwner := policy.ConfirmOutbound || step != "" ||
 		slices.ContainsFunc(p.Tasks, func(task PlanTask) bool {
-			// A main conversation or direction lead may directly continue read-only work it supervises, including across
-			// a launcher or supervision change. The handoff alone is no owner decision. Request gates, sensitive outbound
-			// context, explicit owner steps, and every writable handoff keep their existing owner confirmation.
-			handoffNeedsOwner := task.HandoffOperationID != "" && (!orchestrates || !task.Readonly)
+			// A main conversation or direction lead may directly continue work it supervises, including a writable
+			// cross-launcher or cross-supervision change. Request gates, sensitive outbound context and explicit owner
+			// steps remain owner decisions; an ordinary conversation's handoff keeps its existing confirmation.
+			handoffNeedsOwner := task.HandoffOperationID != "" && !orchestrates
 			return task.RequestGate != "" || handoffNeedsOwner
 		})
 	var autoStartReasons []string
@@ -552,7 +553,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			title, body = s.redactedNotice(ctx, l, space)
 		}
 		n := Notification{CardID: p.ID, Subtitle: machineName, DeviceID: here, SessionID: sessionID, Title: title, Body: body}
-		if s.quietModeOn(ctx) {
+		if s.nonOwnerCardPushHeld(ctx) {
 			// Starting ordinary work is a reversible operational decision: keep its card in Needs you and the briefing,
 			// not on the lock screen. The explicit owner steps keep their P0. The plan key groups duplicates without
 			// changing the legacy notification at all while quiet/grading is off.

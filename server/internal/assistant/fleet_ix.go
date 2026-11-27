@@ -78,6 +78,9 @@ type pending struct {
 	told bool
 	// route: on its way up to the user through its task's supervisors (ask_route.go); nil once it is the user's.
 	route *askRoute
+	// heldNonOwner marks the first P1 presentation made by handNonOwnerCard. It lets that card be escalated once
+	// even though tellApps marked it told; ringAsks clears it, so an already escalated card cannot ring again.
+	heldNonOwner bool
 	// seenTTL and deadlineChanged govern owner-only timed cards whose short countdown starts only
 	// when the user views the card in an app (owner_card_expiry.go).
 	seenTTL         time.Duration
@@ -787,6 +790,11 @@ func (s *Service) record(ix proto.Interaction) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), historyTimeout)
 	defer cancel()
+	if s.nonOwnerCardPushHeld(ctx) && ix.PushLevel == assistantwire.LevelP0 && !s.managerClassifiedP0(ix) {
+		// Persist the trust decision, not an external card's self-declared urgency. Otherwise a restart would restore
+		// the original P0 after the live announce path had correctly downgraded it to held P1.
+		ix.PushLevel = ""
+	}
 	if err := st.InsertInteraction(ctx, ix); err != nil {
 		s.logf("record interaction: %v", err)
 	}
@@ -1626,8 +1634,14 @@ func nodeCard(ix proto.Interaction, remembers, confirms, assistant bool) proto.I
 // ixInAssistant: ix is a card of one of this manager's assistant conversations (isAssistant), by the working directory
 // the node gave it, else the conversation's as the machine lists it.
 func (s *Service) ixInAssistant(ctx context.Context, ix proto.Interaction) bool {
+	if ix.SessionID == "" {
+		return false
+	}
+	if sess, ok := s.session(ctx, ix.MachineID, ix.SessionID); ok && sess.Assistant {
+		return true // the node's explicit conversation kind is stronger than a missing device home in tests/recovery.
+	}
 	m, ok := s.fleetMachine(ix.MachineID)
-	if !ok || ix.SessionID == "" {
+	if !ok {
 		return false
 	}
 	sess := proto.Session{SessionID: ix.SessionID, Cwd: ix.Cwd}
@@ -1953,6 +1967,9 @@ func (s *Service) restoreStoredInteractions(ctx context.Context, st staleInterac
 	s.fleet.mu.Unlock()
 	var unrouted []proto.Interaction
 	for _, ix := range back {
+		if s.restoreHeldNonOwnerCard(ctx, ix) {
+			continue
+		}
 		if !s.restoreRoute(ctx, ix) {
 			unrouted = append(unrouted, ix)
 		}

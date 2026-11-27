@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -73,25 +74,35 @@ func (s *Service) scheduleFailureTarget(ctx context.Context, t Task) (string, bo
 	return "", false
 }
 
-// handNonOwnerCard intercepts non-six-class interaction cards (agent_permission, agent_question,
-// extension_approval) that were not routed by ask_route or delegable, and hands them to the task's
-// supervisor or the main conversation instead of pushing them to the owner.
+// presentHeldNonOwnerCard puts a non-six-class card on the owner's Needs you list without an immediate alert. The
+// interaction itself carries P1 as well as the notification, so the hub's state projection and its push grading agree.
+// heldAnnounced prevents the channels' catch-up from turning the held card into a second, owner-facing card.
+func (s *Service) presentHeldNonOwnerCard(ix proto.Interaction, src string) {
+	ix.Delegating = false
+	ix.PushLevel = assistantwire.LevelP1
+	shown := s.tellApps(ix)
+	s.recordConfirmationNotification(shown)
+	s.heldAnnounced(shown.ID)
+	s.deliverCard(src, Notification{
+		Kind: assistantwire.NotifyInput, DeviceID: shown.MachineID, Subtitle: s.machineName(shown.MachineID),
+		SessionID: shown.SessionID, Interaction: &shown, Level: assistantwire.LevelP1, RelatedKey: "ix:" + shown.ID,
+	})
+}
+
+// handNonOwnerCard intercepts every interaction card whose source is outside the owner's six classes and was not
+// already handled by ask_route or delegable. This includes agent permissions and questions, the manager's tool
+// permissions, device control and extension approvals. The card remains pending and answerable: its route is parked
+// with the supervisor/main conversation, while quiet or grading mode additionally exposes it through tellApps as P1.
 //
-// Cards that genuinely belong to one of the owner's six classes — secrets/forms/elicitations,
-// outward writes (mail_send, comments, etc.), approvals matching userApproval, and unparsed or
-// user-only terminal dialogs (trust folder, delete risk, etc.) — return false so they still reach
-// the owner as before. So do the cards of the assistant's own supervising conversations (the main
-// conversation, the background supervisor, a leader), as askLadder leaves them (supervisorConversation):
-// handed on, such a card was parked where no conversation was woken for it or could hand it up (#15360).
+// Owner-only forms, secrets, outward writes, paid or irreversible actions, explicit delegate context and user-only
+// terminal dialogs return false, preserving the ordinary P0 owner path. A supervising conversation's own card is never
+// handed to itself or another supervisor; with grading on it is still shown directly to the owner as a held P1 card.
 func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 	src := s.inputCardSource(ix, false)
-	if src != cardAgentPermission && src != cardAgentQuestion && src != cardExtensionApproval {
+	if cardCategoryOf(src) != cardCatNone {
 		return false
 	}
-	if secretOrForm(ix) {
-		return false
-	}
-	if ix.Kind == proto.IxPermission && userApproval(ix) != "" {
+	if ix.Delegate != nil || userApproval(ix) != "" {
 		return false
 	}
 	if ix.Kind == proto.IxScreen && (!supervisedScreen(ix) || userScreen(ix) != "") {
@@ -100,13 +111,18 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	held := s.nonOwnerCardPushHeld(ctx)
 	cfg := s.settings(ctx)
-	if cfg.supervisorConversation(ix.SessionID) {
-		return false
+	to, routed := "", false
+	if !cfg.supervisorConversation(ix.SessionID) {
+		to, routed = s.nonOwnerCardTarget(ctx, ix.MachineID, ix.SessionID)
+		// Never let a malformed or stale route point back at its source.
+		if to == ix.SessionID {
+			to, routed = "", false
+		}
 	}
-	to, ok := s.nonOwnerCardTarget(ctx, ix.MachineID, ix.SessionID)
-	if !ok {
-		return false
+	if !routed && !held {
+		return false // With both switches off, an unrouteable card keeps its legacy owner delivery.
 	}
 	home := cfg.MachineID
 	if s.devs != nil && home != "" {
@@ -120,26 +136,38 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 		return false
 	}
 	now := time.Now()
-	// Parked at askRemindMax with empty todo so askTick never emits a todo-less sigAsk or rings
-	// the owner on timeout, while routedTo still lets the target or main conversation answer it.
-	p.route = &askRoute{
-		machine:   home,
-		ladder:    []string{to},
-		routedAt:  now,
-		since:     now,
-		held:      now,
-		parked:    true,
-		reminders: askRemindMax,
+	if routed {
+		// Parked at askRemindMax with empty todo so askTick never emits a todo-less sigAsk or rings
+		// the owner on timeout, while routedTo still lets the target or main conversation answer it.
+		p.route = &askRoute{
+			machine:   home,
+			ladder:    []string{to},
+			routedAt:  now,
+			since:     now,
+			held:      now,
+			parked:    true,
+			reminders: askRemindMax,
+		}
 	}
-	p.ix.Delegating = true
+	p.ix.Delegating = routed && !held
+	if held {
+		p.ix.PushLevel = assistantwire.LevelP1
+	}
 	s.fleet.mu.Unlock()
 
-	shown := ix
-	shown.Delegating = true
-	s.show(shown)
+	if held {
+		s.presentHeldNonOwnerCard(ix, src)
+	} else {
+		shown := ix
+		shown.Delegating = true
+		s.show(shown)
+	}
+	if !routed {
+		return true
+	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Non-owner card (%s) routed to you instead of pushing to the user.\n", src)
+	fmt.Fprintf(&b, "Non-owner card (%s) routed to you; the owner has no immediate alert.\n", src)
 	fmt.Fprintf(&b, "interaction_id=%s kind=%s", ix.ID, ix.Kind)
 	if ix.MachineID != "" {
 		fmt.Fprintf(&b, " machine=%s", ix.MachineID)
@@ -164,10 +192,7 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 		s.publish(ctx)
 	}
 	s.workEvent(ix.MachineID, ix.SessionID, "ask_routed_nonowner", map[string]any{
-		"to":     to,
-		"source": src,
-		"kind":   ix.Kind,
-		"id":     ix.ID,
+		"to": to, "source": src, "kind": ix.Kind, "id": ix.ID, "held": held,
 	})
 	return true
 }

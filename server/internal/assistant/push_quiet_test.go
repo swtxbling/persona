@@ -601,6 +601,28 @@ func TestQuietModeFollowsTheHubsHello(t *testing.T) {
 	}
 }
 
+// PushGradingCards is an additive hello contract: it changes only the non-owner card presentation, not the legacy
+// quiet switch itself. An older hub's omitted field remains off.
+func TestNonOwnerCardPushHeldReadsPushGradingCards(t *testing.T) {
+	s, f := newTaskService(t)
+	ctx := context.Background()
+	pushQuietFor(t, s, false)
+	if s.nonOwnerCardPushHeld(ctx) {
+		t.Fatal("non-owner card grading is on without a hub announcement")
+	}
+	f.setHello(func(h *Hello) { h.PushGradingCards = true })
+	if !s.nonOwnerCardPushHeld(ctx) {
+		t.Fatal("non-owner card grading ignored Hello.PushGradingCards")
+	}
+	var decoded Hello
+	if err := json.Unmarshal([]byte(`{"push_grading_cards":true}`), &decoded); err != nil || !decoded.PushGradingCards {
+		t.Fatalf("the additive hello field did not decode: %+v, %v", decoded, err)
+	}
+	if s.quietModeOn(ctx) {
+		t.Fatal("PushGradingCards unexpectedly enabled the legacy quiet switch")
+	}
+}
+
 // A reply reminder is keyed by the question it waits on: the same stop of the same agent is one key, a new question
 // (a later stop) another, so the hub never takes an agent's second question for a repeat of its first.
 func TestReplyReminderKeyedByQuestion(t *testing.T) {

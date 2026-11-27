@@ -37,6 +37,13 @@ func (s *Service) quietModeOn(ctx context.Context) bool {
 	return s.hello(ctx).QuietPush || s.attentionNow(ctx).Active()
 }
 
+// nonOwnerCardPushHeld says whether a non-six-class interaction card should be visible in Needs you and submitted
+// to the hub as an explicit P1, rather than alerting as an ordinary owner card. QuietPush and the hub's additive
+// PushGradingCards announcement both enable this presentation. With both false, the legacy route and delivery remain.
+func (s *Service) nonOwnerCardPushHeld(ctx context.Context) bool {
+	return s.quietModeOn(ctx) || s.hello(ctx).PushGradingCards
+}
+
 // quietHoldsAsk: low-distraction mode keeps ask a off the Feishu bot: a conclusion (task_review accepted, cannot) or a "Please verify"
 // is listed by the briefing, the board and the web app instead (NoCard), as one held for a briefing is. A decision is
 // not: what the owner must decide still goes out (its own push is P0, todo_ask.go).

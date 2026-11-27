@@ -113,13 +113,15 @@ type fakeHub struct {
 	noModel        bool
 	asked          []modelCall
 	pushes         []Notification
-	failNotify     int              // notify.request fails this many more times as when the hub is away and nothing was kept
-	refuseNotify   error            // notify.request is the hub's refusal (answered) while set
-	notifyResult   NotifyResult     // the held/reason answer notify.request returns once it succeeds
-	events         []string         // the type of each event the apps were sent
-	onBroadcast    func()           // runs once an event is recorded, while Broadcast has not returned yet
-	liveEvents     []map[string]any // the meeting_live events as sent
-	snaps          []Snapshot
+	// notifyCards is an optional test-only stream of interaction pushes, written while mu is held.
+	notifyCards  chan Notification
+	failNotify   int              // notify.request fails this many more times as when the hub is away and nothing was kept
+	refuseNotify error            // notify.request is the hub's refusal (answered) while set
+	notifyResult NotifyResult     // the held/reason answer notify.request returns once it succeeds
+	events       []string         // the type of each event the apps were sent
+	onBroadcast  func()           // runs once an event is recorded, while Broadcast has not returned yet
+	liveEvents   []map[string]any // the meeting_live events as sent
+	snaps        []Snapshot
 
 	sessionsContextCheck bool // sessions.list rejects an expired caller context, as a real RPC does
 
@@ -969,6 +971,9 @@ func (f *fakeHub) NotifyRequest(_ context.Context, p NotifyRequest) (NotifyResul
 		return NotifyResult{}, errors.New("the hub is away")
 	}
 	f.pushes = append(f.pushes, p.Notification)
+	if f.notifyCards != nil && p.Notification.Interaction != nil {
+		f.notifyCards <- p.Notification
+	}
 	return f.notifyResult, nil
 }
 

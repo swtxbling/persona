@@ -898,10 +898,12 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(opened.querySelector("[data-needs-open-entry]")!.getAttribute("title")).toContain("Demo task");
     act(() => opened.querySelector<HTMLButtonElement>("button[aria-expanded=true]")!.click());
     expect(host.querySelector('[data-needs-row="task:tray-task"]')!.tagName).toBe("BUTTON");
-    // every row is folded again when the tray is closed and opened
+    // every row is folded again when the tray is closed and opened by its capsule, with automatic opening off by default
     act(() => host.querySelector<HTMLButtonElement>('button[data-needs-row="task:tray-task"]')!.click());
     act(() => entry("needs").click());
+    expect(entry("needs").getAttribute("aria-expanded")).toBe("false");
     act(() => entry("needs").click());
+    expect(entry("needs").getAttribute("aria-expanded")).toBe("true");
     expect(host.querySelector('[data-needs-row="task:tray-task"]')!.tagName).toBe("BUTTON");
     // the agent is not a row of its own in either tray (the chat's hand-off card names it)
     expect(trays()).not.toContain("Demo agent");

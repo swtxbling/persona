@@ -73,7 +73,7 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
   const open = (e: React.MouseEvent) => {
     // set to Full page, picked from another place it opens the page the conversation kept over it (#13164)
     go(to, () => pickMainChat(active))(e);
-    if (e.defaultPrevented && main && pending > 0) requestDirectWaiting(main.session_id);
+    if (e.defaultPrevented && main && pending > 0) requestDirectWaiting(main.session_id, { automatic: true });
   };
   const link = (
     <a

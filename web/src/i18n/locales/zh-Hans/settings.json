@@ -13,6 +13,8 @@
   "agent_preferences": "Agent 偏好",
   "reply_motion": "回复动效",
   "reply_motion_hint": "新到的回复逐词淡入；系统开了「减弱动态效果」时不播。",
+  "auto_open_needs_you": "进入主对话时自动展开「要你处理」",
+  "auto_open_needs_you_hint": "从侧栏进入主对话时，如有要你处理的事就展开托盘。默认关闭；无论是否开启，都可点击底部计数胶囊自行展开。仅对当前浏览器生效。",
   "starred_messages": "消息收藏",
   "starred_messages_hint": "在侧栏显示「消息收藏」，并在消息菜单里提供收藏 / 取消收藏。关闭时已收藏的消息会保留。",
   "sidebar_terminals": "侧边栏显示终端",

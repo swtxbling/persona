@@ -11,6 +11,7 @@ vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
+import { setAutoOpenNeedsYou, takeDirectWaitingRequest } from "../lib/direct-waiting";
 import { COLLAPSED_KEY, getLayout, setSidebarCollapsed, useLayout } from "../lib/layout";
 import { setAllFolded } from "../lib/sidebar-api";
 import { refresh, reset } from "../lib/store";
@@ -351,6 +352,38 @@ describe("the main conversation: the column's first row, Main chat with its home
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
   };
+
+  it.each(["row", "rail"] as const)("auto-opens Needs you from the %s only when the browser setting is on", async (kind) => {
+    const requested = vi.fn();
+    window.addEventListener("persona:task-pending", requested);
+    try {
+      const renderEntry = async () => {
+        await load();
+        if (kind === "rail") {
+          act(() => root.render(<SidebarRail route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
+          await flush();
+        }
+      };
+      const link = () => kind === "row" ? mainRow() : host.querySelector<HTMLAnchorElement>('nav a[aria-label="Persona 2"]')!;
+
+      await renderEntry();
+      expect(link()).not.toBeNull();
+      if (kind === "row") expect(mainRow().querySelector("[data-main-waiting]")?.textContent).toBe("2");
+      act(() => link().click());
+      expect(location.pathname).toBe("/");
+      expect(requested).not.toHaveBeenCalled();
+
+      setAutoOpenNeedsYou(true);
+      history.replaceState(null, "", "/overview");
+      await renderEntry();
+      act(() => link().click());
+      expect(requested).toHaveBeenCalledTimes(1);
+      expect(requested.mock.calls[0][0]).toMatchObject({ detail: "main" });
+    } finally {
+      takeDirectWaitingRequest("main");
+      window.removeEventListener("persona:task-pending", requested);
+    }
+  });
 
   it("offers New chat in「Persona 对话」, not above the main chat, and an icon in the rail, only with an assistant (#3231)", async () => {
     const newChats = () => [...host.querySelectorAll<HTMLAnchorElement>('a[href="/persona/new"]')];

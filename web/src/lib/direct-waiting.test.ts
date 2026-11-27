@@ -1,6 +1,18 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { decisionLaterKey, type NeedsYouItem } from "./assistant-entries";
-import { directUserInteraction, directUserWaiting, directWaitingCount } from "./direct-waiting";
+import {
+  autoOpenNeedsYou,
+  directUserInteraction,
+  directUserWaiting,
+  directWaitingCount,
+  requestDirectWaiting,
+  setAutoOpenNeedsYou,
+  takeDirectWaitingRequest,
+  useAutoOpenNeedsYouSetting,
+} from "./direct-waiting";
 import type { FeedItem } from "./feed";
 import { hubNeedsYou } from "./todo-triage";
 import { interactionID } from "./ids-wire";
@@ -170,5 +182,116 @@ describe("main conversation direct-user waiting", () => {
     // Verify exact counts for the two D19 / one-number invariants on their own:
     expect(directWaitingCount(directUserWaiting([quietPlainScreenTask]), [])).toBe(0);
     expect(directWaitingCount(directUserWaiting([heldOnlyTask]), [])).toBe(1);
+  });
+});
+
+describe("automatic Needs you requests and their browser setting", () => {
+  const conversation = "main";
+  const key = "persona.autoOpenNeedsYou";
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+  beforeEach(() => {
+    localStorage.clear();
+    setAutoOpenNeedsYou(false);
+    takeDirectWaitingRequest(conversation);
+  });
+  afterEach(() => {
+    setAutoOpenNeedsYou(false);
+    takeDirectWaitingRequest(conversation);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("falls back to false without throwing when localStorage is unavailable or rejects access", () => {
+    vi.stubGlobal("localStorage", undefined);
+    expect(autoOpenNeedsYou()).toBe(false);
+    expect(() => setAutoOpenNeedsYou(true)).not.toThrow();
+    expect(autoOpenNeedsYou()).toBe(false);
+
+    vi.stubGlobal("localStorage", {
+      getItem: () => { throw new DOMException("Blocked", "SecurityError"); },
+      setItem: () => { throw new DOMException("Blocked", "SecurityError"); },
+      removeItem: () => { throw new DOMException("Blocked", "SecurityError"); },
+    });
+    expect(autoOpenNeedsYou()).toBe(false);
+    expect(() => setAutoOpenNeedsYou(false)).not.toThrow();
+  });
+
+  it("updates the setting hook only for its own storage key or a clear event", () => {
+    let shown: boolean | undefined;
+    const Probe = () => {
+      shown = useAutoOpenNeedsYouSetting();
+      return null;
+    };
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    try {
+      act(() => root.render(createElement(Probe)));
+      expect(shown).toBe(false);
+      const read = vi.spyOn(localStorage, "getItem");
+      read.mockClear();
+
+      act(() => window.dispatchEvent(new StorageEvent("storage", { key: "persona.unrelated" })));
+      expect(read).not.toHaveBeenCalled();
+      expect(shown).toBe(false);
+
+      act(() => {
+        localStorage.setItem(key, "1");
+        window.dispatchEvent(new StorageEvent("storage", { key, newValue: "1" }));
+      });
+      expect(shown).toBe(true);
+
+      act(() => {
+        localStorage.clear();
+        window.dispatchEvent(new StorageEvent("storage", { key: null }));
+      });
+      expect(shown).toBe(false);
+    } finally {
+      act(() => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("keeps an explicit request effective while the setting is off, including across another disable", () => {
+    const emitted = vi.fn();
+    window.addEventListener("persona:task-pending", emitted);
+    try {
+      setAutoOpenNeedsYou(false);
+      requestDirectWaiting(conversation);
+      expect(emitted).toHaveBeenCalledTimes(1);
+      expect(emitted.mock.calls[0][0]).toMatchObject({ detail: conversation });
+
+      setAutoOpenNeedsYou(true);
+      setAutoOpenNeedsYou(false);
+      expect(takeDirectWaitingRequest(conversation)).toBe(true);
+      expect(takeDirectWaitingRequest(conversation)).toBe(false);
+    } finally {
+      window.removeEventListener("persona:task-pending", emitted);
+    }
+  });
+
+  it("clears an unconsumed automatic request when this page disables the setting", () => {
+    setAutoOpenNeedsYou(true);
+    requestDirectWaiting(conversation, { automatic: true });
+    setAutoOpenNeedsYou(false);
+    expect(autoOpenNeedsYou()).toBe(false);
+    expect(takeDirectWaitingRequest(conversation)).toBe(false);
+
+    // Re-enabling later must not resurrect the request that disabling already invalidated.
+    setAutoOpenNeedsYou(true);
+    expect(takeDirectWaitingRequest(conversation)).toBe(false);
+  });
+
+  it("rejects and drains an unconsumed automatic request after another tab disables the setting", () => {
+    setAutoOpenNeedsYou(true);
+    requestDirectWaiting(conversation, { automatic: true });
+
+    localStorage.removeItem(key);
+    act(() => window.dispatchEvent(new StorageEvent("storage", { key, newValue: null })));
+    expect(autoOpenNeedsYou()).toBe(false);
+    expect(takeDirectWaitingRequest(conversation)).toBe(false);
+
+    setAutoOpenNeedsYou(true);
+    expect(takeDirectWaitingRequest(conversation)).toBe(false);
   });
 });

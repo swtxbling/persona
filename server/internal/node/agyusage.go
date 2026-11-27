@@ -77,6 +77,27 @@ func (s agyStep) normalizedModel() string {
 	return m
 }
 
+// extractAgyStepTokens normalizes the four non-overlapping token counts (plus 1h cache writes) from one agy step's
+// top-level fields and optional nested usage object. Negative values are clamped to 0.
+func extractAgyStepTokens(in, out, cr, crAlt, cw, cwAlt, cw1h int64, u *agyStepUsage) (input, output, cacheRead, cacheWrite, cacheWrite1h int64, ok bool) {
+	var nu agyStepUsage
+	if u != nil {
+		nu = *u
+	}
+	input = firstPositive64(in, nu.InputTokens)
+	output = firstPositive64(out, nu.OutputTokens)
+	cacheRead = firstPositive64(cr, crAlt, nu.CacheReadTokens, nu.CacheReadInputTokens)
+	cacheWrite = firstPositive64(cw, cwAlt, nu.CacheWriteTokens, nu.CacheCreationInputTokens)
+	cacheWrite1h = firstPositive64(cw1h, nu.CacheWrite1hTokens)
+	if cacheWrite1h > cacheWrite {
+		cacheWrite = cacheWrite1h
+	}
+	if input == 0 && output == 0 && cacheRead == 0 && cacheWrite == 0 {
+		return 0, 0, 0, 0, 0, false
+	}
+	return input, output, cacheRead, cacheWrite, cacheWrite1h, true
+}
+
 // tokenUsage extracts per-request token counts and an optional recorded context window from a single agy step.
 // agy reports input_tokens exclusive of cache_read_tokens (as in modelrun.go), matching proto.TokenUsage.Input.
 func (s agyStep) tokenUsage() (usage proto.TokenUsage, contextTokens int, contextWindow int, ok bool) {
@@ -84,16 +105,14 @@ func (s agyStep) tokenUsage() (usage proto.TokenUsage, contextTokens int, contex
 	if s.Usage != nil {
 		u = *s.Usage
 	}
-	in := firstPositive64(s.InputTokens, u.InputTokens)
-	out := firstPositive64(s.OutputTokens, u.OutputTokens)
-	cacheRead := firstPositive64(s.CacheReadTokens, s.CacheReadInputTokens, u.CacheReadTokens, u.CacheReadInputTokens)
-	cacheWrite := firstPositive64(s.CacheWriteTokens, s.CacheCreationInputTokens, u.CacheWriteTokens, u.CacheCreationInputTokens)
-	cacheWrite1h := firstPositive64(s.CacheWrite1hTokens, u.CacheWrite1hTokens)
-	if cacheWrite1h > cacheWrite {
-		cacheWrite = cacheWrite1h
-	}
 	contextWindow = firstPositiveInt(s.ContextWindow, s.ModelContextWindow, u.ContextWindow, u.ModelContextWindow)
-	if in == 0 && out == 0 && cacheRead == 0 && cacheWrite == 0 {
+	in, out, cacheRead, cacheWrite, cacheWrite1h, has := extractAgyStepTokens(
+		s.InputTokens, s.OutputTokens,
+		s.CacheReadTokens, s.CacheReadInputTokens,
+		s.CacheWriteTokens, s.CacheCreationInputTokens,
+		s.CacheWrite1hTokens, s.Usage,
+	)
+	if !has {
 		return proto.TokenUsage{}, 0, contextWindow, false
 	}
 	usage = proto.TokenUsage{

@@ -193,6 +193,7 @@ func TestUsageMeterCountsAForkOnce(t *testing.T) {
 // transcript is counted once.
 func TestUsageMeterCountsWorkflowAgents(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
 	n, home := testNode(t)
 	now := time.Now().UTC().Truncate(time.Minute).Add(30 * time.Second)
 	session := filepath.Join(home, ".claude", "projects", "-work-app", "s1")

@@ -254,7 +254,7 @@ func (n *Node) backfillScan(ctx context.Context, files []backfillFile, queries [
 	m := newUsageMeter()
 	m.step, m.until, m.seen = 3600, end, map[uint64]struct{}{}
 	m.launcherOf = func(session string) string {
-		st, _ := n.state.get(session)
+		st, _ := n.usageSessionState(session)
 		return st.Launcher
 	}
 	for _, f := range files {
@@ -271,7 +271,7 @@ func (n *Node) backfillScan(ctx context.Context, files []backfillFile, queries [
 			return nil, err
 		}
 		for _, r := range recs {
-			m.add(&usageFile{}, r, start)
+			m.add(&usageFile{}, usageRecordFromTokenuse(r), start)
 		}
 	}
 	out := make([]proto.UsageBucket, 0, len(m.buckets))
@@ -324,7 +324,7 @@ func (m *usageMeter) scanSlice(ctx context.Context, f usagePath, start, end time
 				return false
 			}
 		}
-		if rec, ok := uf.parser.Line(line); ok {
+		if rec, ok := uf.parser.line(line); ok {
 			m.add(uf, rec, start)
 		}
 		return true

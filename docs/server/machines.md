@@ -268,7 +268,11 @@ How many tokens each machine runs, for the Machines page's cards and charts (the
   (`$PI_CODING_AGENT_DIR`, else `~/.pi/agent` and `~/.omp/agent`: `sessions/<cwd>/<time>_<id>.jsonl`, #9992). opencode keeps its steps in a SQLite database (`$PERSONA_OPENCODE_DB`,
   else `$XDG_DATA_HOME/opencode/opencode.db`, default `~/.local/share/opencode/opencode.db`): its adapter queries it with the system `sqlite3` (`node/usage_opencode.go`), the rows added
   since the last read and the unfinished ones again, nothing while the database has not changed; without `sqlite3` (a Linux machine often has none) opencode is not metered.
-  Cursor's CLI and Antigravity keep no token counts the node can read and check: they are not metered. A runtime with no record of its own can report per-request deltas through the runtime SDK (`docs/integrations/runtimes.md`, "Runtime token usage"). The parsers (`server/internal/tokenuse`)
+  Antigravity (`agy`) writes its steps to `<agy data root>/brain/<conversation>/.system_generated/logs/transcript.jsonl`
+  (falling back to `transcript_full.jsonl` when the compact export is absent) under its data root (`node/usage_agy.go`):
+  `PLANNER_RESPONSE` and `CHECKPOINT` steps count once per step (streaming updates add only their positive delta, and `CHECKPOINT` inherits the session's latest model),
+  and subagent conversations attribute to their parent conversation's launcher.
+  Cursor's CLI keeps no token counts the node can read and check: it is not metered. A runtime with no record of its own can report per-request deltas through the runtime SDK (`docs/integrations/runtimes.md`, "Runtime token usage"). The parsers (`server/internal/tokenuse`)
   are the same ones the usage on a chat's replies and the subagent summaries read (`docs/protocol/protocol.md`, "Token usage on items"), so a request counts the same everywhere
   and sums the replies per minute, model, **agent** (its adapter's, `proto.Session.Agent`'s names, #9984) and **launcher**: the launcher Persona started the session with (`sessionState.Launcher`, looked up by the transcript's session or thread id;
   a subagent's or workflow agent's transcript is its session's). A session typed in a terminal has no launcher (`""`, shown as "Other"). The node keeps 26 hours and reports changed minutes as `usage`

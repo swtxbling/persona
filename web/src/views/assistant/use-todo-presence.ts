@@ -1,6 +1,7 @@
 // One controlled presence check for both task cards and the task panel. A cache miss starts no timers and no retries.
-import { useEffect, useRef, useState } from "react";
-import { getState, refreshTodosControlled, storeRevision, useStore, type State, type TodoRefreshResult } from "../../lib/store";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { credentialOwner, subscribeCredentialOwner } from "../../lib/api";
+import { getState, refreshTodosControlled, subscribeTodoRevision, todoRevision, useStore, type State, type TodoRefreshResult } from "../../lib/store";
 import type { Todo } from "../../lib/todos";
 import { useShownOffline, type ShownOffline } from "../ManagerParts";
 
@@ -12,6 +13,8 @@ type Completion = { id: string; entry: Entry; result?: TodoRefreshResult; gone: 
 
 // Components sharing an id share only this one miss segment. Entry identity prevents an old completion deleting a new one.
 const inFlight = new Map<string, Entry>();
+// Static rendering has no localStorage. Hydration switches to the real credentialOwner snapshot and subscription.
+const serverCredentialOwner = () => "server";
 
 function healthy(state: State, offline: ShownOffline | null): boolean {
   return state.todosLoaded && !state.todosError && state.todosSupported && state.conn === "online" && !offline &&
@@ -35,9 +38,12 @@ function startEntry(id: string): Entry {
 }
 
 export function useTodoPresence(todoId: string | undefined): { status: TodoPresenceStatus; todo?: Todo } {
-  // This version changes even when a mutation replaces one empty todo array with another. It redraws and revokes an
-  // already-shown proof immediately after putTodo(), dropTodo(), reset(), or a credential-owner change.
-  useStore(() => storeRevision());
+  // Only a fresh to-do answer, putTodo(), dropTodo(), or reset() advances this version. It redraws even when an
+  // empty-array replacement or 304 leaves every selected field equal; unrelated global writes do not reach this hook.
+  useSyncExternalStore(subscribeTodoRevision, todoRevision, todoRevision);
+  // Credential writes and other tabs' storage events do not pass through store.set(). Their explicit subscription
+  // immediately revokes a displayed proof without using the old Promise to revive it if the credential later returns.
+  useSyncExternalStore(subscribeCredentialOwner, credentialOwner, serverCredentialOwner);
   const todos = useStore((state) => state.todos);
   useStore((state) => ({
     conn: state.conn,

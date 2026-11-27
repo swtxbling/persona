@@ -180,10 +180,21 @@ let state: State = {
 };
 
 const listeners = new Set<() => void>();
-/** Bumped on every state change so presence proofs can redraw even when a replacement leaves all compared fields equal. */
-let stateRevision = 0;
-export function storeRevision() {
-  return stateRevision;
+// Presence proofs have their own version: an unrelated sessions, machines, interactions, or outbox write is not a
+// to-do invalidation and must not redraw every mounted task card. A fresh answer changes this even for an empty-array
+// replacement or a 304 whose kept list has the same identity.
+let todosRevision = 0;
+const todoRevisionListeners = new Set<() => void>();
+export function todoRevision() {
+  return todosRevision;
+}
+export function subscribeTodoRevision(listener: () => void): () => void {
+  todoRevisionListeners.add(listener);
+  return () => { todoRevisionListeners.delete(listener); };
+}
+function publishTodoRevision() {
+  todosRevision++;
+  todoRevisionListeners.forEach((listener) => listener());
 }
 
 // What a hub push changes is in `state` at once (getState, the code after it), but the views hear of it once per
@@ -210,7 +221,6 @@ function notifySoon() {
 }
 
 function set(patch: Partial<State>) {
-  stateRevision++;
   const next = { ...state, ...patch };
   // Most sessions never encounter a deletion: only filter affected collections once one is known.
   if (hasDeletedConversations()) {
@@ -1892,13 +1902,19 @@ export type TodoRefreshResult = {
   current: () => boolean;
 };
 
+/** Publish after the state write so presence consumers read the applied answer and its health in one render. */
+function finishTodoRefresh(kind: TodoRefreshResult["kind"]): TodoRefreshResult["kind"] {
+  publishTodoRevision();
+  return kind;
+}
+
 /** Both refresh paths share the list, error and unsupported-hub (404) handling; only a fresh answer finishes loading. */
 function applyTodos(todos: PromiseSettledResult<TodosListAnswer>, fresh: () => boolean): TodoRefreshResult["kind"] {
   if (!fresh()) return "stale"; // a later answer is in place, or this one belongs to a login reset() ended
   if (todos.status === "fulfilled") {
     if (todos.value.notModified) {
       set({ todosLoaded: true, todosSupported: true, todosError: null });
-      return "applied";
+      return finishTodoRefresh("applied");
     }
     const list = todos.value.todos ?? [];
     const sharedBlockers = Array.isArray(todos.value.shared_blockers) ? todos.value.shared_blockers : [];
@@ -1924,7 +1940,7 @@ function applyTodos(todos: PromiseSettledResult<TodosListAnswer>, fresh: () => b
     });
     keepTaskRows([]);
     void lookUpTaskAgents();
-    return "applied";
+    return finishTodoRefresh("applied");
   }
   const reason = todos.reason;
   if (reason instanceof ApiError && reason.status === 404) {
@@ -1932,10 +1948,10 @@ function applyTodos(todos: PromiseSettledResult<TodosListAnswer>, fresh: () => b
     defaultTodos = [];
     olderClosedTodos = [];
     set({ todos: [], sharedBlockers: [], todoBoard: null, closedCursors: {}, closedLoading: false, closedError: null, todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
-    return "unsupported";
+    return finishTodoRefresh("unsupported");
   }
   set({ todosLoaded: true, todosError: errorText(reason) });
-  return "rejected";
+  return finishTodoRefresh("rejected");
 }
 
 export function computeSpacesSupported(todos: Todo[]): boolean {
@@ -1956,6 +1972,7 @@ export function putTodo(todo: Todo) {
     ? olderClosedTodos.map((t) => (t.id === todo.id ? { ...t, ...todo, wait: todo.wait } : t))
     : olderClosedTodos.filter((t) => t.id !== todo.id);
   set({ todos: state.todos.map((t) => (t.id === todo.id ? { ...t, ...todo, wait: todo.wait } : t)) });
+  publishTodoRevision();
 }
 
 /** Takes a todo the hub just deleted out of the list at once; a /todos answer asked for before the delete is older
@@ -1966,6 +1983,7 @@ export function dropTodo(id: string) {
   defaultTodos = defaultTodos.filter((t) => t.id !== id);
   olderClosedTodos = olderClosedTodos.filter((t) => t.id !== id);
   set({ todos: state.todos.filter((t) => t.id !== id) });
+  publishTodoRevision();
 }
 
 /**
@@ -2437,6 +2455,7 @@ export function reset() {
     conn: "connecting",
     link: { ...NO_LINK, networkUp: networkUp() },
   });
+  publishTodoRevision();
   // last: the list resets above tell subscribers while the old cards are still there, and a lookup started then
   // belongs to the old login
   forgetCardRows(false);

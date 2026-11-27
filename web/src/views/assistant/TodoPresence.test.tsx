@@ -11,15 +11,17 @@ vi.hoisted(() => {
 });
 
 import { t } from "../../i18n";
+import { setToken } from "../../lib/api";
 import { getFeedState, type FeedItem, type TaskPlan } from "../../lib/feed";
 import { chooseManager, resetManagerChoice } from "../../lib/manager-choice";
 import { setRoster, type ManagerList } from "../../lib/managers";
-import { applyCompleteSessions, dropTodo, getState, putTodo, refreshTodos, reset, type Conn } from "../../lib/store";
+import { applyCompleteSessions, dropTodo, getState, putTodo, refreshTodos, reset, setOutbox, setPushGrading, type Conn } from "../../lib/store";
 import type { Todo } from "../../lib/todos";
 import type { Session } from "../../lib/types";
 import { HandoffCard, type Handoff } from "./Handoff";
 import { TaskPanel } from "./TaskPanel";
 import { FeedLineView } from "./Tasks";
+import { useTodoPresence } from "./use-todo-presence";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -85,6 +87,12 @@ function view(target: Target, id: string, known = false): ReactNode {
   return target === "handoff"
     ? <HandoffCard handoff={handoff(id, known)} />
     : <TaskPanel todoId={id} onClose={() => {}} />;
+}
+
+function PresenceProbe({ id, label, onRender }: { id?: string; label: string; onRender: () => void }) {
+  onRender();
+  const { status } = useTodoPresence(id);
+  return <span data-presence-probe={label}>{status}</span>;
 }
 
 async function drawTarget(target: Target, id: string, known = false) {
@@ -206,6 +214,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await unmount();
+  setToken("");
   host.remove();
   resetManagerChoice();
   setRoster(null);
@@ -387,6 +396,22 @@ describe.each<Target>(["handoff", "panel"])("%s controlled cache-miss recheck", 
     expect(reads).toHaveLength(2);
   });
 
+  it("revokes an old proof when a newer 304 answer applies without replacing the list", async () => {
+    const id = `not-modified-${target}-${sequence++}`;
+    await drawTarget(target, id);
+    await resolveRead(0, [], { headers: { ETag: 'W/"t1-presence"' } });
+    expectGone(target);
+    const newer = refreshTodos();
+    await flush();
+    expect(reads).toHaveLength(2);
+    await respondRead(1, new Response(null, { status: 304, headers: { ETag: 'W/"t1-presence"' } }));
+    await newer;
+    expectPresence(target, "unavailable");
+    await drawTarget(target, id);
+    expectPresence(target, "unavailable");
+    expect(reads).toHaveLength(2);
+  });
+
   it("keeps a newer answer containing the id present when the old missing-id answer lands", async () => {
     const id = `stale-present-${target}-${sequence++}`;
     await drawTarget(target, id);
@@ -418,6 +443,27 @@ describe.each<Target>(["handoff", "panel"])("%s controlled cache-miss recheck", 
     expectGone(target);
     await act(async () => mutate(kind, id));
     await flush();
+    expectPresence(target, "unavailable");
+    expect(reads).toHaveLength(1);
+  });
+
+  it.each(["same-tab", "cross-tab"] as const)("revokes an established gone proof immediately after a %s credential change", async (kind) => {
+    const id = `credential-${kind}-${target}-${sequence++}`;
+    setToken(`credential-before-${id}`);
+    await drawTarget(target, id);
+    await resolveRead(0, []);
+    expectGone(target);
+    await act(async () => {
+      if (kind === "same-tab") setToken(`credential-after-${id}`);
+      else {
+        localStorage.setItem("persona.token", `credential-after-${id}`);
+        window.dispatchEvent(new StorageEvent("storage", { key: "persona.token" }));
+      }
+      await Promise.resolve();
+    });
+    await flush();
+    expectPresence(target, "unavailable");
+    await drawTarget(target, id);
     expectPresence(target, "unavailable");
     expect(reads).toHaveLength(1);
   });
@@ -535,6 +581,37 @@ describe("shared presence admissions", () => {
     await draw(<StrictMode><TaskPanel todoId={id} onClose={() => {}} /></StrictMode>);
     await resolveRead(0, [todo(id)]);
     expectPresent("panel", id);
+    expect(reads).toHaveLength(1);
+  });
+
+  it("does not redraw present, no-id, or miss consumers for unrelated store writes", async () => {
+    const presentId = "render-count-present";
+    const missId = "render-count-miss";
+    seed({ todos: [todo(presentId)] });
+    const counts = { present: 0, "no-id": 0, miss: 0 };
+    await draw(<>
+      <PresenceProbe id={presentId} label="present" onRender={() => { counts.present++; }} />
+      <PresenceProbe label="no-id" onRender={() => { counts["no-id"]++; }} />
+      <PresenceProbe id={missId} label="miss" onRender={() => { counts.miss++; }} />
+    </>);
+    await resolveRead(0, [todo(presentId)]);
+    expect(host.querySelector('[data-presence-probe="present"]')?.textContent).toBe("present");
+    expect(host.querySelector('[data-presence-probe="no-id"]')?.textContent).toBe("no-id");
+    expect(host.querySelector('[data-presence-probe="miss"]')?.textContent).toBe("gone");
+
+    const unrelatedWrites: Array<[string, () => void]> = [
+      ["sessions", () => applyCompleteSessions([{ ...agent, title: "Unrelated session update" }])],
+      ["machines", () => applyCompleteSessions([], [], { machines: [] })],
+      ["interactions", () => applyCompleteSessions([], [], { interactions: [] })],
+      ["outbox", () => setOutbox("presence-render-unrelated", [])],
+      ["other state", () => setPushGrading(true)],
+    ];
+    for (const [name, write] of unrelatedWrites) {
+      const before = { ...counts };
+      await act(async () => { write(); await Promise.resolve(); });
+      await flush();
+      expect(counts, `unrelated ${name} write`).toEqual(before);
+    }
     expect(reads).toHaveLength(1);
   });
 
